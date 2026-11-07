@@ -445,6 +445,9 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
 if __name__ == "__main__":
     app, _, _ = demo.launch(
         mcp_server=True, css=CSS, pwa=True, favicon_path="static/icon-192.png", prevent_thread_lock=True,
+        # HF Space에서는 Gradio가 Node SSR 서버를 앞에 두는데, 그 서버는 /privacy·/app-static·/.well-known 같은
+        # 직접 추가한 경로를 Python으로 넘기지 않고 Gradio 화면으로 응답한다. SSR을 끄면 Python이 모든 경로를 처리한다.
+        ssr_mode=False,
     )
     web_routes.install(app)  # /manifest.json, /privacy, /.well-known/assetlinks.json, 아이콘
     demo.block_thread()
