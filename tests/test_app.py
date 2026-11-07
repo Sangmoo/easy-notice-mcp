@@ -100,7 +100,7 @@ def claude(monkeypatch):
 @pytest.fixture
 def gpu(monkeypatch):
     """가짜 GPU 모델: 모든 페이지에서 (100,100)-(500,140)에 주민번호가 있다고 OCR."""
-    calls = SimpleNamespace(prepare=[], tts=[], fail=False)
+    calls = SimpleNamespace(prepare=[], fail=False)
 
     def prepare(images, flags, do_ocr):
         if calls.fail:
@@ -110,14 +110,7 @@ def gpu(monkeypatch):
         ocr = [[([[100, 100], [500, 100], [500, 140], [100, 140]], "900101-1234567", 0.9)] if do_ocr else [] for _ in out]
         return out, ocr
 
-    def tts(speech, slow=False):
-        if calls.fail:
-            raise RuntimeError("ZeroGPU quota exceeded")
-        calls.tts.append(speech)
-        return 16000, np.zeros(1600, dtype=np.float32)
-
     monkeypatch.setattr(models, "gpu_prepare", prepare)
-    monkeypatch.setattr(models, "gpu_tts", tts)
     return calls
 
 
@@ -200,8 +193,6 @@ def test_claude_mode_never_uses_gpu(claude, gpu):
     _claude_with_regions(claude)
     out = pipeline.explain([(_png(), "a.png")], "보통", KEY, mode="Claude API")
     assert out.route == "claude" and gpu.prepare == []
-    assert pipeline.speak(out.voice["speech"], "Claude API") == (None, True)  # 브라우저 음성
-    assert gpu.tts == []
 
 
 def test_fast_mode_without_share_copy_is_lean(claude, gpu):
@@ -235,16 +226,6 @@ def test_auto_many_pages_use_claude(claude, gpu):
     out = pipeline.explain([(_pdf(5), "doc.pdf")], "보통", KEY)
     assert out.route == "claude" and gpu.prepare == []
     assert any("페이지가 많아(5쪽)" in n for n in out.notes)
-
-
-def test_speak(claude, gpu):
-    out = pipeline.explain([(_png(), "a.png")], "보통", KEY)
-    audio, use_browser = pipeline.speak(out.voice["speech"], "자동")
-    assert audio[0] == 16000 and use_browser is False
-    assert gpu.tts == [out.voice["speech"]] and not any(c.isdigit() for c in gpu.tts[0])
-    assert pipeline.speak("", "자동") == (None, False)
-    gpu.fail = True
-    assert pipeline.speak(out.voice["speech"], "자동") == (None, True)  # GPU를 못 쓰면 브라우저 음성으로
 
 
 @pytest.mark.parametrize("stop, text, msg", [
@@ -292,7 +273,7 @@ def test_ui_outputs(tmp_path, claude, gpu):
     f = tmp_path / "a.png"
     f.write_bytes(_png())
     (col, status, card, vtext, vspeech, family, md, gallery, data,
-     gcal, ics, print_page, audio, quota_line) = app.explain_upload(
+     gcal, ics, print_page, quota_line) = app.explain_upload(
         [str(f)], "아주 쉽게", "자동", ["개인정보 가리기", "사진 보정"], "claude-sonnet-5-5", KEY, progress=NOOP)
     assert col["visible"] is True
     assert "가린 뒤" in status
@@ -302,15 +283,37 @@ def test_ui_outputs(tmp_path, claude, gpu):
     assert gcal["visible"] and "https://calendar.google.com/" in gcal["value"] and 'target="_blank"' in gcal["value"]
     assert ics["visible"] and ics["value"].endswith(".ics")
     assert "<!doctype html>" in print_page
-    assert audio == {"value": None, "visible": False, "__type__": "update"} or audio["visible"] is False
     assert len(gallery) == 1 and md.startswith("## 건강보험료 고지서") and "010-2222-3333" not in md
-    assert gpu.tts == []  # 음성은 '듣기'를 눌러야만 만든다
+    assert "제한 없음" in quota_line  # 본인 키로 사용
     assert claude.seen["key"] == KEY
 
-    audio, flag = app.make_voice(vspeech, "자동", False)
-    assert audio["visible"] and audio["value"][0] == 16000 and flag == ""
-    audio, flag = app.make_voice(vspeech, "Claude API", True)
-    assert audio["visible"] is False and flag == "browser"
+
+@pytest.mark.parametrize("key, doc, scam", [("car_tax", "자동차세 고지서 (예시)", False),
+                                            ("scam_sms", "과태료 미납 안내 문자 (사기 의심 예시)", True)])
+def test_examples_need_no_key(key, doc, scam, claude, gpu):
+    """체험 모드: Claude·GPU·무료 횟수를 쓰지 않고 모든 결과 칸을 채운다."""
+    out = app.show_example(key)
+    (col, status, card, vtext, vspeech, family, md, gallery, data, gcal, ics, print_page, quota_line) = out
+    assert col["visible"] and "예시 화면입니다" in status and "예시 화면입니다" in card
+    assert doc in card and data["doc_type"] == doc and len(gallery) == 1
+    assert ("사기일 수 있어요" in card) is scam and ('href="tel:112"' in card) is scam
+    assert vtext and not any(c.isdigit() for c in vspeech)
+    assert gcal["visible"] and ics["visible"] and "<!doctype html>" in print_page
+    assert data["d_day"]["status"] == ("today" if scam else "upcoming")  # 기한은 오늘 기준으로 계산
+    assert claude.calls == [] and gpu.prepare == [] and claude.quota.remaining("local") == 5
+
+
+def test_app_mode_starts_fast():
+    class Req:
+        query_params = {"app": "1"}
+
+    mode, level, model, options = app.load_prefs(dict(app.DEFAULT_PREFS), Req())
+    assert mode["value"] == "Claude API" and options == ["사진 보정"]
+    saved = app.save_prefs("자동", "보통", "claude-haiku-5-5", ["개인정보 가리기"])
+    mode, *_ = app.load_prefs(saved, Req())  # 사용자가 고른 설정이 있으면 그대로
+    assert mode["value"] == "자동"
+    mode, *_ = app.load_prefs(dict(app.DEFAULT_PREFS), None)  # 웹은 자동
+    assert mode["value"] == "자동"
 
 
 def test_ui_without_deadline_hides_calendar(tmp_path, claude, gpu):

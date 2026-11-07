@@ -6,7 +6,6 @@
 - "무료 모델(GPU)": 항상 GPU. 실패하면 오류로 알려 준다.
 - "Claude API"(화면 표시: ⚡ 빠르게): GPU를 쓰지 않는다. 원본이 Claude로 간다.
   share_copy면 Claude가 알려 준 위치로 '공유용 사본'만 가린다(응답이 길어져 조금 느려짐).
-  음성은 브라우저 읽기(화면)·안내 문장(MCP)으로 대신한다.
 """
 from __future__ import annotations
 
@@ -175,18 +174,3 @@ def explain(
         route=route,
         notes=notes,
     )
-
-
-def speak(speech: str, mode: str, slow: bool = False) -> tuple[tuple[int, object] | None, bool]:
-    """'듣기'를 눌렀을 때만 부른다. 반환: (GPU 음성 또는 None, 브라우저로 읽어야 하는지).
-
-    빠르게 방식이거나 GPU를 못 쓰면(사용량 초과 등) 브라우저 내장 음성으로 바로 대신 읽는다.
-    """
-    if not speech:
-        return None, False
-    if mode == CLAUDE:
-        return None, True
-    try:
-        return models.gpu_tts(speech, slow), False
-    except Exception:  # noqa: BLE001 - 사용량 초과 등
-        return None, True

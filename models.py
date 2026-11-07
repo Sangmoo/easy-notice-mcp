@@ -1,10 +1,11 @@
-"""ZeroGPU에서 도는 무료 모델들.
+"""ZeroGPU에서 도는 무료 모델들 (모두 상업적 이용 가능한 라이선스).
+
+음성 안내는 비상업 라이선스 모델 대신 휴대폰·PC에 내장된 음성(브라우저 speechSynthesis)으로 읽는다.
 
 | 기능 | 모델 | 라이선스 |
 |---|---|---|
 | 글자 위치 찾기(개인정보 가림용 OCR) | EasyOCR (ko+en, CRAFT + CRNN) | Apache-2.0 |
 | 저해상도 사진 2배 확대 | caidas/swin2SR-classical-sr-x2-64 | Apache-2.0 |
-| 음성 안내(TTS) | facebook/mms-tts-kor (VITS) | CC-BY-NC-4.0 (비상업 무료) |
 
 ZeroGPU 규칙: 모델은 시작할 때 모듈 수준에서 .to("cuda")로 올려 두고, @spaces.GPU 함수 안에서만 실행한다.
 ZeroGPU가 아닌 곳(로컬·테스트)에서는 처음 쓸 때 CPU로 불러온다.
@@ -31,12 +32,10 @@ DEVICE = "cuda" if (ON_ZEROGPU or torch.cuda.is_available()) else "cpu"
 
 OCR_LANGS = ["ko", "en"]
 SR_ID = "caidas/swin2SR-classical-sr-x2-64"
-TTS_ID = "facebook/mms-tts-kor"
 
 # ZeroGPU는 신청 시간이 짧은 작업을 먼저 처리한다. 넉넉하되 짧게 잡는다.
 GPU_SECONDS_PER_PAGE = 4
 GPU_BASE_SECONDS = 8
-TTS_GPU_SECONDS = 10
 
 
 def gpu(**kwargs):
@@ -73,16 +72,7 @@ def _load_sr():
     return proc, model
 
 
-def _load_tts():
-    import uroman
-    from transformers import AutoTokenizer, VitsModel
-
-    tok = AutoTokenizer.from_pretrained(TTS_ID)
-    model = VitsModel.from_pretrained(TTS_ID).to(DEVICE).eval()
-    return tok, model, uroman.Uroman()
-
-
-_LOADERS = {"ocr": _load_ocr, "sr": _load_sr, "tts": _load_tts}
+_LOADERS = {"ocr": _load_ocr, "sr": _load_sr}
 
 
 def get(name: str):
@@ -121,18 +111,6 @@ def ocr(img: Image.Image) -> list:
     return [([[float(x), float(y)] for x, y in box], str(text), float(conf)) for box, text, conf in results]
 
 
-SLOW_RATE = 0.8  # '천천히 읽기' 속도 (1.0이 기본)
-
-
-def tts(speech: str, slow: bool = False) -> tuple[int, np.ndarray]:
-    tok, model, rom = get("tts")
-    inputs = tok(rom.romanize_string(speech), return_tensors="pt").to(DEVICE)
-    torch.manual_seed(0)  # 같은 문장은 같은 소리로
-    with torch.no_grad():
-        wav = model(**inputs, speaking_rate=SLOW_RATE if slow else 1.0).waveform[0].float().cpu().numpy()
-    return int(model.config.sampling_rate), wav
-
-
 # ---------- @spaces.GPU 함수 ----------
 
 def _prepare_seconds(images, upscale_flags, do_ocr):
@@ -149,8 +127,3 @@ def gpu_prepare(images: list[Image.Image], upscale_flags: list[bool], do_ocr: bo
         out_images.append(img)
         out_ocr.append(ocr(img) if do_ocr else [])
     return out_images, out_ocr
-
-
-@gpu(duration=TTS_GPU_SECONDS)
-def gpu_tts(speech: str, slow: bool = False):
-    return tts(speech, slow)

@@ -21,9 +21,11 @@ from typing import Literal
 
 import gradio as gr
 
+import examples
 import pipeline
 import senior
-from claude_util import MODELS, fetch_source, read_upload, server_key
+import web_routes
+from claude_util import MODELS, fetch_source, read_upload, server_key, today_kst
 from errors import ToolError
 from logic import LEVELS, MAX_FILES, render
 from quota import client_ip, quota
@@ -86,18 +88,23 @@ MODE_CHOICES = [
     ("무료 모델(GPU)만", pipeline.GPU),
 ]
 MODE_INFO = {
-    pipeline.CLAUDE: "가장 빠릅니다. 원본이 Claude로 전송되고, 음성은 휴대폰·PC에 들어 있는 목소리로 읽어요. "
+    pipeline.CLAUDE: "가장 빠릅니다. GPU를 쓰지 않고 원본이 Claude로 전송돼요. "
                      "'개인정보 가리기'를 켜면 가린 공유용 사본도 만들어요(조금 느려짐).",
     pipeline.AUTO: "무료 GPU 모델로 개인정보를 먼저 가린 뒤 Claude에 보내요. GPU 대기 때문에 느릴 수 있고, "
                    "페이지가 많거나 GPU 사용량이 다 되면 빠르게 방식으로 바뀌어요.",
     pipeline.GPU: "항상 무료 GPU 모델을 써요. GPU를 쓸 수 없으면 오류로 알려 줘요.",
 }
-DEFAULT_PREFS = {"mode": pipeline.AUTO, "level": LEVELS[0], "model": "claude-sonnet-5-5", "options": ALL_OPTIONS}
+DEFAULT_PREFS = {"mode": pipeline.AUTO, "level": LEVELS[0], "model": "claude-sonnet-5-5", "options": ALL_OPTIONS,
+                 "saved": False}
+# 안드로이드 앱(시작 주소 /?app=1)은 GPU 하루 사용량이 적은 비로그인 상태라 처음엔 빠르게 방식으로 연다
+APP_DEFAULT = {"mode": pipeline.CLAUDE, "options": [OPT_ENHANCE]}
 KEY_STORE_SECRET = os.getenv("KEY_STORE_SECRET", "easy-notice-key-v1")
 
 
-def load_prefs(prefs):
+def load_prefs(prefs, request: gr.Request = None):
     p = {**DEFAULT_PREFS, **(prefs or {})}
+    if not p.get("saved") and _is_app(request):
+        p.update(APP_DEFAULT)
     mode = p["mode"] if p["mode"] in pipeline.MODES else DEFAULT_PREFS["mode"]
     level = p["level"] if p["level"] in LEVELS else DEFAULT_PREFS["level"]
     model = p["model"] if p["model"] in MODELS else DEFAULT_PREFS["model"]
@@ -106,7 +113,7 @@ def load_prefs(prefs):
 
 
 def save_prefs(mode, level, model, options):
-    return {"mode": mode, "level": level, "model": model, "options": list(options or [])}
+    return {"mode": mode, "level": level, "model": model, "options": list(options or []), "saved": True}
 
 
 def on_mode_change(mode, options):
@@ -117,6 +124,13 @@ def on_mode_change(mode, options):
     elif OPT_REDACT not in options:
         options = [OPT_REDACT, *options]
     return gr.update(value=options), gr.update(info=MODE_INFO.get(mode, ""))
+
+
+def _is_app(request: gr.Request | None) -> bool:
+    try:
+        return request is not None and request.query_params.get("app") == "1"
+    except AttributeError:
+        return False
 
 
 def load_key(stored):
@@ -184,15 +198,31 @@ def explain_upload(files, reading_level, mode, options, model, api_key, request:
         gr.update(value=senior.calendar_button_html(gcal), visible=bool(gcal)),  # 구글 캘린더 (새 탭)
         gr.update(value=ics, visible=bool(ics)),               # .ics
         senior.print_html(out.data),                           # (숨김) 인쇄용 HTML
-        gr.update(value=None, visible=False),                  # 이전 음성 지우기
         quota_text(api_key, request),                          # 남은 무료 횟수
     )
 
 
-def make_voice(speech, mode, slow):
-    """'🔊 듣기'를 눌렀을 때. GPU 음성을 만들거나, 못 만들면 브라우저 음성으로 읽도록 표시한다."""
-    audio, use_browser = pipeline.speak(speech, mode, bool(slow))
-    return gr.update(value=audio, visible=audio is not None), "browser" if use_browser else ""
+def show_example(key: str):
+    """체험 모드: 키 없이, Claude를 부르지 않고 예시 결과를 보여 준다 (무료 횟수도 쓰지 않음)."""
+    data, images, voice = examples.load(key, today_kst())
+    gcal = senior.google_calendar_url(data)
+    banner = ('<div style="background:#fff6e0;color:#5a3d00;border:2px solid #e8b84a;border-radius:12px;'
+              'padding:.6em 1em;margin-bottom:.6em;font-weight:700">' + examples.DEMO_NOTE + "</div>")
+    return (
+        gr.update(visible=True),
+        "- " + examples.DEMO_NOTE,
+        banner + senior.card_html(data),
+        voice["text"],
+        voice["speech"],
+        senior.family_text(data),
+        render(data),
+        images,
+        data,
+        gr.update(value=senior.calendar_button_html(gcal), visible=bool(gcal)),
+        gr.update(value=senior.write_ics(data), visible=bool(gcal)),
+        senior.print_html(data),
+        gr.update(),  # 무료 횟수 안내는 그대로
+    )
 
 
 # ---------- 웹 UI: 브라우저 쪽 동작 (JS) ----------
@@ -227,8 +257,9 @@ CAMERA_JS = """
 """
 
 SPEAK_JS = """
-(text, flag, slow) => {
-  if (flag !== 'browser' || !text || !window.speechSynthesis) return [];
+(text, slow) => {
+  if (!text) return [];
+  if (!window.speechSynthesis) { alert('이 기기에서는 소리 내어 읽기를 지원하지 않아요.'); return []; }
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'ko-KR';
@@ -318,6 +349,10 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
             gr.Markdown("📸 **잘 찍는 요령**: 밝은 곳에서, 종이 네 모서리가 다 보이게, 흔들리지 않게 찍어 주세요.")
             submit = gr.Button("쉽게 풀어주세요", variant="primary", elem_classes="big-btn")
             quota_md = gr.Markdown()
+            gr.Markdown("처음이라면 예시로 먼저 살펴보세요 (키·횟수 없이 바로 볼 수 있어요).")
+            with gr.Row():
+                ex_car_btn = gr.Button("📄 예시: 자동차세 고지서")
+                ex_scam_btn = gr.Button("📄 예시: 사기 의심 문자")
             with gr.Accordion("⚙️ 더보기 설정", open=False):
                 key_in = gr.Textbox(
                     label="내 Anthropic 키로 제한 없이 쓰기 (선택)",
@@ -345,7 +380,6 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
                 listen_btn = gr.Button("🔊 듣기", variant="primary", elem_classes="big-btn")
                 stop_btn = gr.Button("⏹ 멈추기", elem_classes="big-btn")
             slow_in = gr.Checkbox(False, label="천천히 읽기")
-            audio_out = gr.Audio(label="음성", type="numpy", interactive=False, autoplay=True, visible=False)
             voice_text = gr.Textbox(label="읽어 줄 내용", interactive=False, lines=2)
             with gr.Row():
                 gcal_btn = gr.HTML(visible=False)  # 새 탭으로 여는 링크 버튼
@@ -364,12 +398,12 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
 
     # 화면에 보이지 않는 값
     voice_speech = gr.Textbox(visible=False)
-    browser_flag = gr.Textbox(visible=False)
     print_store = gr.Textbox(visible=False)
 
     gr.Markdown(
         "<small>올린 문서는 저장하지 않으며(임시 파일은 1시간 안에 삭제), 주민등록번호·휴대전화 번호는 결과에서 자동으로 가려집니다. "
-        "무료 모델: EasyOCR(Apache-2.0), Swin2SR(Apache-2.0), MMS-TTS 한국어(CC-BY-NC-4.0, 비상업 무료). "
+        "정부·공공기관 앱이 아닙니다. <a href='/privacy' target='_blank'>개인정보처리방침</a> · "
+        "무료 모델: EasyOCR(Apache-2.0), Swin2SR(Apache-2.0), 글꼴 Noto Sans KR(OFL). 음성은 기기 내장 음성을 씁니다. "
         "정리 결과는 참고용입니다. 납부 전에는 원본이나 기관 공식 홈페이지에서 금액과 기한을 확인하세요. "
         "원격 MCP 연결은 아래 'Use via API or MCP'에서 안내합니다.</small>"
     )
@@ -394,12 +428,14 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
         explain_upload,
         [files_in, level_in, mode_in, options_in, model_in, key_in],
         [result_col, status_out, card_out, voice_text, voice_speech, family_out, md_out, gallery_out, json_out,
-         gcal_btn, ics_btn, print_store, audio_out, quota_md],
+         gcal_btn, ics_btn, print_store, quota_md],
         **private,
     )
-    listen_btn.click(
-        make_voice, [voice_speech, mode_in, slow_in], [audio_out, browser_flag], **private,
-    ).then(None, [voice_speech, browser_flag, slow_in], None, js=SPEAK_JS, **private)
+    result_outputs = [result_col, status_out, card_out, voice_text, voice_speech, family_out, md_out, gallery_out,
+                      json_out, gcal_btn, ics_btn, print_store, quota_md]
+    ex_car_btn.click(lambda: show_example("car_tax"), None, result_outputs, **instant)
+    ex_scam_btn.click(lambda: show_example("scam_sms"), None, result_outputs, **instant)
+    listen_btn.click(None, [voice_speech, slow_in], None, js=SPEAK_JS, **private)  # 기기 내장 음성 (서버·GPU 안 씀)
     stop_btn.click(None, None, None, js=STOP_JS, **private)
     share_btn.click(None, [family_out], None, js=SHARE_JS, **private)
     print_btn.click(None, [print_store], None, js=PRINT_JS, **private)
@@ -407,4 +443,8 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
     gr.api(explain_notice, api_name="explain_notice")
 
 if __name__ == "__main__":
-    demo.launch(mcp_server=True, css=CSS)
+    app, _, _ = demo.launch(
+        mcp_server=True, css=CSS, pwa=True, favicon_path="static/icon-192.png", prevent_thread_lock=True,
+    )
+    web_routes.install(app)  # /manifest.json, /privacy, /.well-known/assetlinks.json, 아이콘
+    demo.block_thread()

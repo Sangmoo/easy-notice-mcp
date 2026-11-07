@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true  # static/*.png (아이콘·예시 이미지)
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
