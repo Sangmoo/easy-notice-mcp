@@ -9,7 +9,7 @@ lerna-debug.log*
 
 node_modules
 .DS_Store
-dist
+# dist/ is committed: HF static Space serves it without a build step
 dist-ssr
 coverage
 *.local

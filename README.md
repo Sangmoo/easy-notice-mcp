@@ -5,7 +5,6 @@ colorFrom: blue
 colorTo: green
 sdk: static
 pinned: false
-app_build_command: npm run build
 app_file: dist/index.html
 license: mit
 short_description: 고지서·공문을 쉬운 말로 풀어주는 웹 + MCP 서버
@@ -42,7 +41,7 @@ tags:
 
 ```
 ├── shared/prompts.json      # 시스템 프롬프트 + 난이도 가이드 + 출력 스키마 (웹·MCP 공용)
-├── src/                     # Vue 3 웹앱 (HF static Space에서 npm run build → dist/)
+├── src/                     # Vue 3 웹앱 (npm run build → dist/, dist/를 커밋해 Space가 서빙)
 │   ├── App.vue
 │   ├── components/          # API 키 패널, 파일 선택, 복사 버튼, MCP 안내
 │   └── lib/
@@ -98,7 +97,7 @@ pip install -r requirements.txt
 npm install
 npm run dev          # http://localhost:5173
 npm test             # TypeScript 검증 (vitest)
-npm run build        # 타입 체크 + dist/ 빌드 (HF Space가 실행하는 것과 동일)
+npm run build        # 타입 체크 + dist/ 빌드 → dist/도 커밋 (Space가 그대로 서빙)
 
 pip install -r requirements-dev.txt
 python -m pytest -q  # Python 검증 + MCP stdio 프로토콜 테스트
@@ -107,6 +106,6 @@ python -m pytest -q  # Python 검증 + MCP stdio 프로토콜 테스트
 ## 배포
 
 - GitHub: https://github.com/Sangmoo/easy-notice-mcp
-- Hugging Face Space(static): https://huggingface.co/spaces/Sangmoo/easy-notice-mcp — `main`에 push하면 Space가 `npm run build` 후 `dist/index.html`을 서빙
+- Hugging Face Space(static): https://huggingface.co/spaces/Sangmoo/easy-notice-mcp — 빌드된 `dist/`를 그대로 서빙합니다 (HF의 static 빌드는 유료 크레딧 필요). 코드를 고친 뒤에는 `npm run build`로 `dist/`를 다시 만들어 함께 커밋하세요.
 
 정리 결과는 참고용입니다. 납부 전에는 고지서 원본이나 기관 공식 홈페이지에서 금액과 기한을 확인하세요.
