@@ -68,7 +68,7 @@ Claude Code: `claude mcp add --transport http easy-notice https://sangmoo-easy-n
 
 ### 툴
 
-`explain_notice(files, reading_level="아주 쉽게")`
+`explain_notice(files, reading_level="아주 쉽게")` — HF Space에서는 Space 이름이 붙어 `easy_notice_mcp_explain_notice`로 표시됩니다(클라이언트가 자동으로 인식).
 
 - `files`: 문서 사진 또는 PDF 1~5개 — 공개 **http(s) URL** 또는 **data: URI** (`data:image/jpeg;base64,...`, `data:application/pdf;base64,...`)
 - `reading_level`: `아주 쉽게` | `보통`
