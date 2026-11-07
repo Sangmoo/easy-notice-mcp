@@ -42,7 +42,8 @@ tags:
 - **👨‍👩‍👧 가족에게 보내기**: 개인정보 없는 짧은 요약 + 복사 / 카카오톡·문자 공유
 - **🖨 큰 글씨로 인쇄**: 한 장짜리 인쇄용 페이지
 - **🔍 글씨 크게/작게**: 화면 전체 글자 크기, 이 브라우저에 기억
-- **이 기기에 키 기억하기**(선택): 가족이 어르신 휴대폰에 키를 한 번 넣어 두면 다음부터 묻지 않음(브라우저에 암호화해 저장, 끄면 삭제). 여러 사람이 쓰는 PC에서는 켜지 마세요. Space Secret `KEY_STORE_SECRET`을 넣으면 저장 암호화 키를 바꿀 수 있습니다.
+- **키 없이 바로 사용**: 운영자 키(Space Secret)로 한 사람(IP)당 하루 5번까지 무료. 남은 횟수를 버튼 아래에 표시
+- **내 키로 제한 없이 쓰기**(선택, "더보기 설정"): 가족이 Anthropic 키를 넣어 두면 횟수 제한 없음. "이 기기에 키 기억하기"로 다음부터 다시 넣지 않아도 됨(브라우저에 암호화 저장, 끄면 삭제). 여러 사람이 쓰는 PC에서는 켜지 마세요. Space Secret `KEY_STORE_SECRET`으로 저장 암호화 키를 바꿀 수 있습니다.
 
 ## 처리 방식
 
@@ -99,8 +100,8 @@ Claude Desktop (`claude_desktop_config.json`, `mcp-remote`로 감싸기):
 
 Claude Code: `claude mcp add --transport http easy-notice https://sangmoo-easy-notice-mcp.hf.space/gradio_api/mcp/ --header "X-Anthropic-Key: sk-ant-..."`
 
-**본인 Anthropic API 키가 필수입니다.** MCP는 `X-Anthropic-Key` 헤더로, 웹 화면은 키 입력란으로 넣습니다.
-서버에는 키가 등록되어 있지 않으며(서버 키로 대신 처리하지 않음), 넣은 키는 요청 처리에만 쓰고 저장하거나 로그로 남기지 않습니다. 비용은 키 소유자 계정에 청구됩니다.
+**MCP는 본인 Anthropic API 키가 필수입니다** (`X-Anthropic-Key` 헤더). 운영자 키는 웹·앱 화면의 무료 사용에만 쓰고 MCP에는 쓰지 않습니다.
+넣은 키는 요청 처리에만 쓰고 저장하거나 로그로 남기지 않습니다. 비용은 키 소유자 계정에 청구됩니다.
 
 ### 툴
 
@@ -132,6 +133,7 @@ Claude 응답은 structured outputs(`output_config.format`, JSON Schema)로 받�
 ├── vision.py       # 페이지 준비, 원근·대비 보정, OCR 결과에서 개인정보 찾기·가리기
 ├── voice.py        # 짧은 음성 안내 문장, 숫자 → 한글 수사
 ├── senior.py       # 한눈에 카드, 전화 버튼, 구글 캘린더·.ics, 가족 요약, 큰 글씨 인쇄
+├── quota.py        # 운영자 키 무료 사용 한도 (IP당·전체 하루), 실제 IP 판별
 ├── prompts.py      # 시스템 프롬프트, 난이도 가이드, 출력 JSON 스키마
 ├── claude_util.py  # 본인 API 키 확인, 파일/URL 입력, structured outputs 호출
 ├── validate.py     # 스키마 기준 출력 정규화, API용 스키마 변환
@@ -143,7 +145,9 @@ Claude 응답은 structured outputs(`output_config.format`, JSON Schema)로 받�
 ## Space 설정
 
 - 하드웨어: ZeroGPU. 모델은 시작할 때 GPU용으로 올려 두고 `@spaces.GPU` 함수(`gpu_prepare`, `gpu_tts`) 안에서만 실행합니다.
-- Secret 불필요. (선택) Variable `CLAUDE_MODEL`(기본 모델), `NOTICE_EFFORT`(기본 `low`)
+- Secret `ANTHROPIC_API_KEY`: 운영자 키. 웹·앱 화면에서 키 없이 쓰는 무료 사용에 쓰입니다(없으면 사용자가 키를 넣어야 함). Anthropic 콘솔에서 **월 사용 한도**를 꼭 걸어 두세요.
+- Variable `FREE_DAILY_PER_USER`(기본 5): 한 사람(IP)당 하루 무료 횟수 / `FREE_DAILY_TOTAL`(기본 300): 전체 하루 무료 횟수. 카운터는 Space가 다시 시작되면 초기화됩니다.
+- (선택) Variable `CLAUDE_MODEL`(기본 모델), `NOTICE_EFFORT`(기본 `low`)
 
 ## 로컬 실행·테스트
 

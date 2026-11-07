@@ -27,6 +27,7 @@ import app  # noqa: E402
 import claude_util  # noqa: E402
 import models  # noqa: E402
 import pipeline  # noqa: E402
+import quota as quota_mod  # noqa: E402
 from errors import ToolError  # noqa: E402
 
 FAKE_OUTPUT = {
@@ -80,7 +81,19 @@ def claude(monkeypatch):
         messages.seen["key"] = key
         return SimpleNamespace(messages=messages)
 
+    def fake_server_client():
+        messages.seen["key"] = "OPERATOR"
+        return SimpleNamespace(messages=messages)
+
     monkeypatch.setattr(pipeline, "resolve_client", fake_resolve)
+    monkeypatch.setattr(pipeline, "server_client", fake_server_client)
+    fresh = quota_mod.FreeQuota()
+    monkeypatch.setattr(pipeline, "quota", fresh)
+    monkeypatch.setattr(app, "quota", fresh)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("FREE_DAILY_PER_USER", raising=False)
+    monkeypatch.delenv("FREE_DAILY_TOTAL", raising=False)
+    messages.quota = fresh
     return messages
 
 
@@ -279,7 +292,7 @@ def test_ui_outputs(tmp_path, claude, gpu):
     f = tmp_path / "a.png"
     f.write_bytes(_png())
     (col, status, card, vtext, vspeech, family, md, gallery, data,
-     gcal, ics, print_page, audio) = app.explain_upload(
+     gcal, ics, print_page, audio, quota_line) = app.explain_upload(
         [str(f)], "아주 쉽게", "자동", ["개인정보 가리기", "사진 보정"], "claude-sonnet-5-5", KEY, progress=NOOP)
     assert col["visible"] is True
     assert "가린 뒤" in status
@@ -407,3 +420,54 @@ def test_remote_mcp_without_key(server, claude, gpu, monkeypatch):
     _, res = _mcp(server, {}, {"files": [_data_uri(_png())]})
     assert res.isError and "API 키가 필요합니다" in res.content[0].text
     assert claude.calls == [] and gpu.prepare == []
+
+
+
+# ---------- 6) 운영자 키 무료 사용 ----------
+
+def test_free_use_with_operator_key(claude, gpu, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-operator")
+    out = pipeline.explain([(_png(), "a.png")], "보통", "", mode="Claude API", share_copy=False, free_user="1.1.1.1")
+    assert claude.seen["key"] == "OPERATOR" and out.free_remaining == 4
+    # 본인 키가 있으면 운영자 키·한도를 쓰지 않음
+    out = pipeline.explain([(_png(), "a.png")], "보통", KEY, mode="Claude API", share_copy=False, free_user="1.1.1.1")
+    assert claude.seen["key"] == KEY and out.free_remaining is None
+    assert claude.quota.remaining("1.1.1.1") == 4
+
+
+def test_free_use_limit_and_refund(claude, gpu, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-operator")
+    claude.stop_reason = "refusal"  # Claude 단계 실패 → 횟수 돌려줌
+    with pytest.raises(ToolError, match="거절"):
+        pipeline.explain([(_png(), "a.png")], "보통", None, mode="Claude API", share_copy=False, free_user="1.1.1.1")
+    assert claude.quota.remaining("1.1.1.1") == 5
+    claude.stop_reason = "end_turn"
+    for _ in range(5):
+        pipeline.explain([(_png(), "a.png")], "보통", None, mode="Claude API", share_copy=False, free_user="1.1.1.1")
+    n = len(claude.calls)
+    with pytest.raises(ToolError, match="5번을 모두 쓰셨어요"):
+        pipeline.explain([(b"not read", "x.png")], "보통", None, mode="Claude API", free_user="1.1.1.1")
+    assert len(claude.calls) == n  # 한도 초과는 파일 읽기·Claude 호출 전에 막힘
+
+
+def test_mcp_never_uses_operator_key(claude, gpu, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-operator")
+    with pytest.raises(gr.Error, match="API 키가 필요합니다"):
+        app.explain_notice([_data_uri(_png())], x_anthropic_key=None)
+    assert claude.calls == []
+
+
+def test_no_operator_key_requires_own_key(claude, gpu):
+    with pytest.raises(ToolError, match="API 키가 필요합니다"):
+        pipeline.explain([(_png(), "a.png")], "보통", "", free_user="1.1.1.1")
+
+
+def test_ui_free_use_and_quota_text(tmp_path, claude, gpu, monkeypatch):
+    f = tmp_path / "a.png"
+    f.write_bytes(_png())
+    assert "무료 사용을 할 수 없어요" in app.quota_text("", None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-operator")
+    assert app.quota_text("", None) == "오늘 무료로 **5번** 더 쓸 수 있어요."
+    assert "제한 없음" in app.quota_text(KEY, None)
+    out = app.explain_upload([str(f)], "보통", "Claude API", [], "claude-sonnet-5-5", "", progress=NOOP)
+    assert claude.seen["key"] == "OPERATOR" and out[-1] == "오늘 무료로 **4번** 더 쓸 수 있어요."

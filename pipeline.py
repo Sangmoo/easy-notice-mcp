@@ -17,9 +17,10 @@ from PIL import Image
 
 import models
 import vision
-from claude_util import call_structured, image_block, pdf_block, resolve_client, today_kst
+from claude_util import call_structured, image_block, pdf_block, resolve_client, server_client, server_key, today_kst
 from errors import ToolError
 from logic import LEVELS, finalize
+from quota import quota
 from prompts import (
     LEVEL_GUIDE, PROMPT_ALREADY_REDACTED, PROMPT_FIND_PII, SYSTEM_PROMPT_BASE, schema_for,
 )
@@ -44,6 +45,7 @@ class Outcome:
     voice: dict                        # {'text': 화면용, 'speech': TTS용}
     route: str                         # 'gpu' | 'claude'
     notes: list[str] = field(default_factory=list)
+    free_remaining: int | None = None  # 운영자 키로 무료 사용했으면 오늘 남은 횟수
 
 
 def choose_route(mode: str, image_pages: list[vision.Page], redact: bool, upscale_flags: list[bool]) -> tuple[str, list[str]]:
@@ -66,10 +68,20 @@ def explain(
     share_copy: bool = True,
     model: str | None = None,
     progress: Progress | None = None,
+    free_user: str | None = None,
 ) -> Outcome:
-    """share_copy: Claude 방식일 때 Claude에게 개인정보 위치를 받아 공유용 가린 사본을 만들지."""
+    """share_copy: Claude 방식일 때 Claude에게 개인정보 위치를 받아 공유용 가린 사본을 만들지.
+
+    free_user: 웹·앱 화면에서 온 요청의 사용자 구분값(IP). 본인 키가 없으면 운영자 키로 무료 처리하고
+    하루 한도를 센다. MCP는 None으로 불러 항상 본인 키를 요구한다.
+    """
     step = progress or _noop
-    client = resolve_client(api_key)  # 키가 없으면 파일을 읽기 전에 바로 안내
+    use_operator = not (api_key or "").strip() and free_user is not None and server_key() is not None
+    if use_operator:
+        quota.check(free_user)  # 남은 횟수가 없으면 파일을 읽기 전에 바로 안내
+        client = server_client()
+    else:
+        client = resolve_client(api_key)  # 키가 없으면 파일을 읽기 전에 바로 안내
     if not items:
         raise ToolError("문서 사진이나 PDF를 1개 이상 넣어주세요.")
     if reading_level not in LEVEL_GUIDE:
@@ -129,7 +141,15 @@ def explain(
     content = [image_block(p.image) if p.image is not None else pdf_block(p.pdf) for p in pages]
     content.append({"type": "text", "text": f"오늘 날짜는 {today.isoformat()}입니다. 이 문서를 정리해주세요."})
     schema = schema_for(find_pii)
-    data = finalize(normalize(call_structured(client, system, content, schema, model=model), schema), today)
+    if use_operator:
+        quota.reserve(free_user)
+    try:
+        raw = call_structured(client, system, content, schema, model=model, operator_key=use_operator)
+    except Exception:
+        if use_operator:
+            quota.release(free_user)  # 실패한 요청은 횟수에서 빼 준다
+        raise
+    data = finalize(normalize(raw, schema), today)
     regions = data.pop("pii_regions", None) or []
 
     # 4) Claude 방식 가림: 사용자에게 돌려줄 공유용 사본만 가린다 (원본은 이미 Claude로 감)
@@ -148,6 +168,7 @@ def explain(
     if fixes:
         notes.append("사진 보정: " + ", ".join(fixes))
     return Outcome(
+        free_remaining=quota.remaining(free_user) if use_operator else None,
         data=data,
         images=[p.image for p in pages if p.image is not None],
         voice=build_script(data),

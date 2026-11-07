@@ -60,6 +60,30 @@ def resolve_client(user_key: str | None) -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=key)
 
 
+def server_key() -> str | None:
+    """운영자 키 (Space Secret ANTHROPIC_API_KEY). 웹·앱 화면의 무료 사용에만 쓴다."""
+    key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    return key or None
+
+
+def server_client() -> anthropic.Anthropic:
+    key = server_key()
+    if not key:
+        raise ToolError("지금은 무료 사용을 할 수 없어요. '더보기 설정'에 Anthropic 키를 넣어 주세요.")
+    return anthropic.Anthropic(api_key=key)
+
+
+MSG_OPERATOR_LIMIT = (
+    "이번 달 무료 사용량이 다 찼어요. 다음 달에 다시 써 주세요. "
+    "(가족이 '더보기 설정'에 Anthropic 키를 넣어 주면 바로 쓸 수 있어요)"
+)
+
+
+def _is_billing_error(message: str) -> bool:
+    m = (message or "").lower()
+    return any(w in m for w in ("credit balance", "spend limit", "usage limit", "billing", "limit"))
+
+
 # ---------- 입력 파일 ----------
 #
 # 웹 UI 업로드는 Gradio가 만든 임시 파일 경로(read_upload)로,
@@ -176,8 +200,12 @@ def call_structured(
     schema: dict,
     max_tokens: int = 16000,
     model: str | None = None,
+    operator_key: bool = False,
 ) -> dict:
-    """structured outputs로 스키마에 맞는 JSON을 받아 dict로 돌려준다."""
+    """structured outputs로 스키마에 맞는 JSON을 받아 dict로 돌려준다.
+
+    operator_key: 운영자 키(무료 사용)로 부르는 중이면 True — 한도 초과 안내를 사용자용 문구로 바꾼다.
+    """
     model = model if model in MODELS else MODEL
     try:
         resp = client.messages.create(
@@ -191,14 +219,20 @@ def call_structured(
             },
         )
     except anthropic.AuthenticationError as e:
+        if operator_key:
+            raise ToolError("지금은 무료 사용에 문제가 있어요(운영자 확인 필요). 잠시 후 다시 써 주세요.") from e
         raise ToolError("Anthropic API 키가 올바르지 않습니다.") from e
     except anthropic.PermissionDeniedError as e:
+        if operator_key:
+            raise ToolError(MSG_OPERATOR_LIMIT) from e
         raise ToolError(f"이 API 키로는 요청할 수 없습니다: {e.message}") from e
     except anthropic.NotFoundError as e:
         raise ToolError(f"모델을 찾을 수 없습니다: {model}") from e
     except anthropic.RateLimitError as e:
-        raise ToolError("Anthropic API 요청 한도에 걸렸습니다. 잠시 후 다시 시도해주세요.") from e
+        raise ToolError("지금 사용하는 사람이 많아요. 잠시 후 다시 시도해주세요.") from e
     except anthropic.BadRequestError as e:
+        if _is_billing_error(e.message):
+            raise ToolError(MSG_OPERATOR_LIMIT if operator_key else "Anthropic 계정의 사용 한도·잔액을 확인해주세요.") from e
         raise ToolError(f"요청이 거부되었습니다: {e.message}") from e
     except anthropic.APIStatusError as e:
         raise ToolError(f"Claude 서버 오류({e.status_code})입니다. 잠시 후 다시 시도해주세요.") from e

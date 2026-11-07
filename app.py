@@ -23,9 +23,10 @@ import gradio as gr
 
 import pipeline
 import senior
-from claude_util import MODELS, fetch_source, read_upload
+from claude_util import MODELS, fetch_source, read_upload, server_key
 from errors import ToolError
 from logic import LEVELS, MAX_FILES, render
+from quota import client_ip, quota
 
 
 def _report(outcome: pipeline.Outcome) -> str:
@@ -131,8 +132,27 @@ def save_key(key, remember):
 
 # ---------- 웹 UI: 동작 ----------
 
-def explain_upload(files, reading_level, mode, options, model, api_key, progress=gr.Progress()):
-    """결과를 보여 준다. 음성은 '듣기'를 눌렀을 때만 만든다 (make_voice)."""
+def _user_id(request: gr.Request | None) -> str:
+    if request is None:
+        return "local"
+    return client_ip(dict(request.headers), request.client.host if request.client else None)
+
+
+def quota_text(api_key: str | None, request: gr.Request | None) -> str:
+    """제출 버튼 아래 안내: 오늘 남은 무료 횟수 / 내 키 사용 중."""
+    if (api_key or "").strip():
+        return "🔑 내 키로 쓰는 중이에요 (횟수 제한 없음)"
+    if server_key() is None:
+        return "⚠️ 지금은 무료 사용을 할 수 없어요. '더보기 설정'에 Anthropic 키를 넣어 주세요."
+    return f"오늘 무료로 **{quota.remaining(_user_id(request))}번** 더 쓸 수 있어요."
+
+
+def explain_upload(files, reading_level, mode, options, model, api_key, request: gr.Request = None,
+                   progress=gr.Progress()):
+    """결과를 보여 준다. 음성은 '듣기'를 눌렀을 때만 만든다 (make_voice).
+
+    본인 키가 없으면 운영자 키로 무료 처리한다 (IP당 하루 한도).
+    """
     options = options or []
     try:
         if not files:
@@ -145,6 +165,7 @@ def explain_upload(files, reading_level, mode, options, model, api_key, progress
             share_copy=OPT_REDACT in options,
             model=model,
             progress=lambda frac, msg: progress(frac, desc=msg),
+            free_user=_user_id(request),
         )
     except ToolError as e:
         raise gr.Error(str(e), print_exception=False) from None
@@ -164,6 +185,7 @@ def explain_upload(files, reading_level, mode, options, model, api_key, progress
         gr.update(value=ics, visible=bool(ics)),               # .ics
         senior.print_html(out.data),                           # (숨김) 인쇄용 HTML
         gr.update(value=None, visible=False),                  # 이전 음성 지우기
+        quota_text(api_key, request),                          # 남은 무료 횟수
     )
 
 
@@ -285,16 +307,6 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
 
     with gr.Row():
         with gr.Column(scale=1):
-            key_in = gr.Textbox(
-                label="Anthropic API 키 (필수)",
-                type="password",
-                placeholder="sk-ant-...",
-                info="처음 한 번은 가족이 넣어 주세요. 요청 처리에만 쓰며, 비용은 키 주인 계정에 청구돼요.",
-            )
-            remember_in = gr.Checkbox(
-                False, label="이 기기에 키 기억하기",
-                info="어르신 휴대폰에 한 번 넣어 두면 다음부터 안 물어봐요. 여러 사람이 쓰는 PC에서는 켜지 마세요.",
-            )
             camera_btn = gr.Button("📷 사진 찍기", elem_classes="big-btn")
             files_in = gr.File(
                 label=f"또는 사진·PDF 파일 올리기 (여러 장이면 모두, 최대 {MAX_FILES}개)",
@@ -305,7 +317,20 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
             )
             gr.Markdown("📸 **잘 찍는 요령**: 밝은 곳에서, 종이 네 모서리가 다 보이게, 흔들리지 않게 찍어 주세요.")
             submit = gr.Button("쉽게 풀어주세요", variant="primary", elem_classes="big-btn")
+            quota_md = gr.Markdown()
             with gr.Accordion("⚙️ 더보기 설정", open=False):
+                key_in = gr.Textbox(
+                    label="내 Anthropic 키로 제한 없이 쓰기 (선택)",
+                    type="password",
+                    placeholder="sk-ant-...",
+                    info="키가 없어도 하루 몇 번은 무료로 쓸 수 있어요. 키를 넣으면 횟수 제한 없이 쓰고, "
+                         "비용은 키 주인 계정에 청구돼요. 요청 처리에만 쓰고 서버에 저장하지 않아요.",
+                )
+                remember_in = gr.Checkbox(
+                    False, label="이 기기에 키 기억하기",
+                    info="가족이 어르신 휴대폰에 한 번 넣어 두면 다음부터 다시 넣지 않아도 돼요. "
+                         "여러 사람이 쓰는 PC에서는 켜지 마세요.",
+                )
                 mode_in = gr.Radio(MODE_CHOICES, value=DEFAULT_PREFS["mode"], label="처리 방식",
                                    info=MODE_INFO[DEFAULT_PREFS["mode"]])
                 options_in = gr.CheckboxGroup(ALL_OPTIONS, value=DEFAULT_PREFS["options"], label="추가 기능")
@@ -353,7 +378,9 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
     instant = {**private, "queue": False}  # 설정 불러오기·저장처럼 가벼운 일은 대기열을 건너뜀
     demo.load(None, None, None, js=LOAD_JS, **private)
     demo.load(load_prefs, [prefs], [mode_in, level_in, model_in, options_in], **instant)
-    demo.load(load_key, [key_store], [key_in, remember_in], **instant)
+    demo.load(load_key, [key_store], [key_in, remember_in], **instant).then(
+        quota_text, [key_in], [quota_md], **instant)
+    key_in.change(quota_text, [key_in], [quota_md], **instant)
     big_text_btn.click(None, None, None, js=BIG_TEXT_JS, **private)
     camera_btn.click(None, None, None, js=CAMERA_JS, **private)
 
@@ -367,7 +394,7 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
         explain_upload,
         [files_in, level_in, mode_in, options_in, model_in, key_in],
         [result_col, status_out, card_out, voice_text, voice_speech, family_out, md_out, gallery_out, json_out,
-         gcal_btn, ics_btn, print_store, audio_out],
+         gcal_btn, ics_btn, print_store, audio_out, quota_md],
         **private,
     )
     listen_btn.click(
