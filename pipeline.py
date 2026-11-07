@@ -156,13 +156,16 @@ def explain(
     )
 
 
-def speak(speech: str, mode: str) -> tuple[tuple[int, object] | None, str | None]:
-    """음성 만들기. GPU를 못 쓰면 (None, 안내)를 돌려 브라우저 읽기로 대신한다."""
+def speak(speech: str, mode: str, slow: bool = False) -> tuple[tuple[int, object] | None, bool]:
+    """'듣기'를 눌렀을 때만 부른다. 반환: (GPU 음성 또는 None, 브라우저로 읽어야 하는지).
+
+    빠르게 방식이거나 GPU를 못 쓰면(사용량 초과 등) 브라우저 내장 음성으로 바로 대신 읽는다.
+    """
     if not speech:
-        return None, None
+        return None, False
     if mode == CLAUDE:
-        return None, "빠르게 방식에서는 '🔊 브라우저로 읽기'로 들어 주세요."
+        return None, True
     try:
-        return models.gpu_tts(speech), None
+        return models.gpu_tts(speech, slow), False
     except Exception:  # noqa: BLE001 - 사용량 초과 등
-        return None, "GPU 음성을 만들 수 없어요. '🔊 브라우저로 읽기'로 들어 주세요."
+        return None, True

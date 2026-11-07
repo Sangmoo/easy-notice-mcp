@@ -97,7 +97,7 @@ def gpu(monkeypatch):
         ocr = [[([[100, 100], [500, 100], [500, 140], [100, 140]], "900101-1234567", 0.9)] if do_ocr else [] for _ in out]
         return out, ocr
 
-    def tts(speech):
+    def tts(speech, slow=False):
         if calls.fail:
             raise RuntimeError("ZeroGPU quota exceeded")
         calls.tts.append(speech)
@@ -187,7 +187,7 @@ def test_claude_mode_never_uses_gpu(claude, gpu):
     _claude_with_regions(claude)
     out = pipeline.explain([(_png(), "a.png")], "보통", KEY, mode="Claude API")
     assert out.route == "claude" and gpu.prepare == []
-    assert pipeline.speak(out.voice["speech"], "Claude API") == (None, "빠르게 방식에서는 '🔊 브라우저로 읽기'로 들어 주세요.")
+    assert pipeline.speak(out.voice["speech"], "Claude API") == (None, True)  # 브라우저 음성
     assert gpu.tts == []
 
 
@@ -226,12 +226,12 @@ def test_auto_many_pages_use_claude(claude, gpu):
 
 def test_speak(claude, gpu):
     out = pipeline.explain([(_png(), "a.png")], "보통", KEY)
-    audio, note = pipeline.speak(out.voice["speech"], "자동")
-    assert audio[0] == 16000 and note is None
+    audio, use_browser = pipeline.speak(out.voice["speech"], "자동")
+    assert audio[0] == 16000 and use_browser is False
     assert gpu.tts == [out.voice["speech"]] and not any(c.isdigit() for c in gpu.tts[0])
-    assert pipeline.speak("", "자동") == (None, None)
+    assert pipeline.speak("", "자동") == (None, False)
     gpu.fail = True
-    assert pipeline.speak(out.voice["speech"], "자동")[0] is None
+    assert pipeline.speak(out.voice["speech"], "자동") == (None, True)  # GPU를 못 쓰면 브라우저 음성으로
 
 
 @pytest.mark.parametrize("stop, text, msg", [
@@ -278,23 +278,47 @@ def test_fetch_source_rejects_unsafe(src, msg):
 def test_ui_outputs(tmp_path, claude, gpu):
     f = tmp_path / "a.png"
     f.write_bytes(_png())
-    status, vtext, vspeech, audio, md, gallery, data = app.explain_upload(
-        [str(f)], "아주 쉽게", "자동", ["개인정보 가리기", "사진 보정", "음성 안내"], "claude-sonnet-5-5", KEY,
-        progress=NOOP)
+    (col, status, card, vtext, vspeech, family, md, gallery, data,
+     gcal, ics, print_page, audio) = app.explain_upload(
+        [str(f)], "아주 쉽게", "자동", ["개인정보 가리기", "사진 보정"], "claude-sonnet-5-5", KEY, progress=NOOP)
+    assert col["visible"] is True
     assert "가린 뒤" in status
+    assert "건강보험료 고지서" in card and "87,650원" in card and 'href="tel:15771000"' in card
     assert vtext.startswith("건강보험료를 내라는 안내예요.") and "팔만 칠천육백오십 원" in vspeech
-    assert audio is None and len(gallery) == 1  # 글 결과 먼저, 음성은 다음 단계
-    assert gpu.tts == []
-    audio, status2 = app.make_voice(vspeech, "자동", status)
-    assert audio[0] == 16000 and status2 == status
-    audio, status3 = app.make_voice(vspeech, "Claude API", status)
-    assert audio is None and "브라우저로 읽기" in status3
-    assert md.startswith("## 건강보험료 고지서") and "010-2222-3333" not in md
+    assert family.startswith("[고지서 요약] 건강보험료 고지서") and "010" not in family
+    assert gcal["visible"] and "https://calendar.google.com/" in gcal["value"] and 'target="_blank"' in gcal["value"]
+    assert ics["visible"] and ics["value"].endswith(".ics")
+    assert "<!doctype html>" in print_page
+    assert audio == {"value": None, "visible": False, "__type__": "update"} or audio["visible"] is False
+    assert len(gallery) == 1 and md.startswith("## 건강보험료 고지서") and "010-2222-3333" not in md
+    assert gpu.tts == []  # 음성은 '듣기'를 눌러야만 만든다
     assert claude.seen["key"] == KEY
+
+    audio, flag = app.make_voice(vspeech, "자동", False)
+    assert audio["visible"] and audio["value"][0] == 16000 and flag == ""
+    audio, flag = app.make_voice(vspeech, "Claude API", True)
+    assert audio["visible"] is False and flag == "browser"
+
+
+def test_ui_without_deadline_hides_calendar(tmp_path, claude, gpu):
+    claude.output = {**FAKE_OUTPUT, "deadline": None, "deadline_original_text": None}
+    f = tmp_path / "a.png"
+    f.write_bytes(_png())
+    out = app.explain_upload([str(f)], "보통", "Claude API", [], "claude-sonnet-5-5", KEY, progress=NOOP)
+    gcal, ics = out[9], out[10]
+    assert gcal["visible"] is False and ics["visible"] is False
+
+
+def test_key_memory():
+    assert app.load_key({"key": "  sk-ant-saved "}) == ("sk-ant-saved", True)
+    assert app.load_key(None) == ("", False)
+    assert app.load_key("sk-ant-old-format") == ("", False)
+    assert app.save_key(" sk-ant-x ", True) == {"key": "sk-ant-x"}
+    assert app.save_key("sk-ant-x", False) == {"key": ""}  # 끄면 저장된 키를 지움 (빈 값도 객체로 저장)
 
 
 def test_ui_errors(tmp_path, claude, gpu):
-    with pytest.raises(gr.Error, match="1개 이상"):
+    with pytest.raises(gr.Error, match="사진을 찍거나 파일을 올려"):
         app.explain_upload(None, "보통", "자동", [], "claude-sonnet-5-5", KEY, progress=NOOP)
     f = tmp_path / "a.png"
     f.write_bytes(_png())
@@ -324,6 +348,7 @@ def test_mcp_function(claude, gpu):
     out = app.explain_notice([_data_uri(_png()), _data_uri(_pdf(1), "application/pdf")], "보통", "자동", True, True,
                              "claude-sonnet-5-5", KEY)
     assert "### 🔊 음성 안내" in out and "## 건강보험료 고지서" in out and "```json" in out
+    assert "[고지서 요약] 건강보험료 고지서" in out and "calendar.google.com" in out
     assert "가린 뒤" in out
     # 기본값은 빠르게(Claude API): GPU 없이, 좌표도 요청하지 않음
     claude.calls.clear()

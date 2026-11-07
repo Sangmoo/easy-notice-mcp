@@ -121,12 +121,15 @@ def ocr(img: Image.Image) -> list:
     return [([[float(x), float(y)] for x, y in box], str(text), float(conf)) for box, text, conf in results]
 
 
-def tts(speech: str) -> tuple[int, np.ndarray]:
+SLOW_RATE = 0.8  # '천천히 읽기' 속도 (1.0이 기본)
+
+
+def tts(speech: str, slow: bool = False) -> tuple[int, np.ndarray]:
     tok, model, rom = get("tts")
     inputs = tok(rom.romanize_string(speech), return_tensors="pt").to(DEVICE)
     torch.manual_seed(0)  # 같은 문장은 같은 소리로
     with torch.no_grad():
-        wav = model(**inputs).waveform[0].float().cpu().numpy()
+        wav = model(**inputs, speaking_rate=SLOW_RATE if slow else 1.0).waveform[0].float().cpu().numpy()
     return int(model.config.sampling_rate), wav
 
 
@@ -149,5 +152,5 @@ def gpu_prepare(images: list[Image.Image], upscale_flags: list[bool], do_ocr: bo
 
 
 @gpu(duration=TTS_GPU_SECONDS)
-def gpu_tts(speech: str):
-    return tts(speech)
+def gpu_tts(speech: str, slow: bool = False):
+    return tts(speech, slow)
