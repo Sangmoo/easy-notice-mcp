@@ -350,17 +350,18 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
     )
 
     private = {"api_visibility": "private"}
+    instant = {**private, "queue": False}  # 설정 불러오기·저장처럼 가벼운 일은 대기열을 건너뜀
     demo.load(None, None, None, js=LOAD_JS, **private)
-    demo.load(load_prefs, [prefs], [mode_in, level_in, model_in, options_in], **private)
-    demo.load(load_key, [key_store], [key_in, remember_in], **private)
+    demo.load(load_prefs, [prefs], [mode_in, level_in, model_in, options_in], **instant)
+    demo.load(load_key, [key_store], [key_in, remember_in], **instant)
     big_text_btn.click(None, None, None, js=BIG_TEXT_JS, **private)
     camera_btn.click(None, None, None, js=CAMERA_JS, **private)
 
-    mode_in.input(on_mode_change, [mode_in, options_in], [options_in, mode_in], **private)
+    mode_in.input(on_mode_change, [mode_in, options_in], [options_in, mode_in], **instant)
     for comp in (mode_in, level_in, model_in, options_in):
-        comp.change(save_prefs, [mode_in, level_in, model_in, options_in], [prefs], **private)
+        comp.change(save_prefs, [mode_in, level_in, model_in, options_in], [prefs], **instant)
     for comp in (key_in, remember_in):
-        comp.change(save_key, [key_in, remember_in], [key_store], **private)
+        comp.change(save_key, [key_in, remember_in], [key_store], **instant)
 
     submit.click(
         explain_upload,
