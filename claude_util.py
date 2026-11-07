@@ -55,8 +55,8 @@ def resolve_client(user_key: str | None) -> anthropic.Anthropic:
 
 # ---------- 입력 파일 ----------
 #
-# 웹 UI 업로드는 Gradio가 만든 임시 파일 경로(file_block)로,
-# 원격 MCP 호출은 http(s) URL 또는 data: URI(source_block)로 들어온다.
+# 웹 UI 업로드는 Gradio가 만든 임시 파일 경로(read_upload)로,
+# 원격 MCP 호출은 http(s) URL 또는 data: URI(fetch_source)로 들어온다.
 # 원격 호출자가 서버의 로컬 경로를 넘기면 Space의 파일(환경변수 등)을 읽게 되므로 절대 허용하지 않는다.
 
 _PRIVATE_NET_MSG = "내부 네트워크 주소의 파일은 받을 수 없습니다."
@@ -123,23 +123,20 @@ def fetch_source(src: str) -> tuple[bytes, str]:
     return data, name
 
 
-def block_from_bytes(data: bytes, name: str) -> dict:
-    if data[:5] == b"%PDF-" or name.lower().endswith(".pdf"):
-        return {
-            "type": "document",
-            "source": {
-                "type": "base64",
-                "media_type": "application/pdf",
-                "data": base64.standard_b64encode(data).decode(),
-            },
-        }
-    if len(data) > MAX_IMAGE_BYTES:
-        raise ToolError(f"이미지가 너무 큽니다(20MB 초과): {name}")
-    try:
-        img = Image.open(io.BytesIO(data))
-        img = ImageOps.exif_transpose(img).convert("RGB")  # EXIF 회전 보정
-    except (UnidentifiedImageError, OSError) as e:
-        raise ToolError(f"'{name}'을(를) 읽을 수 없습니다. JPG·PNG·WEBP 사진이나 PDF로 넣어주세요.") from e
+def pdf_block(data: bytes) -> dict:
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": base64.standard_b64encode(data).decode(),
+        },
+    }
+
+
+def image_block(img: Image.Image) -> dict:
+    """PIL 이미지 → JPEG base64 블록 (긴 변 MAX_SIDE로 축소)."""
+    img = img.convert("RGB")
     img.thumbnail((MAX_SIDE, MAX_SIDE))
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
@@ -153,20 +150,14 @@ def block_from_bytes(data: bytes, name: str) -> dict:
     }
 
 
-def file_block(path: str) -> dict:
-    """웹 UI 업로드(Gradio 임시 파일 경로) → 입력 블록."""
+def read_upload(path: str) -> tuple[bytes, str]:
+    """웹 UI 업로드(Gradio 임시 파일 경로) → (바이트, 이름)."""
     p = Path(path)
     if not p.is_file():
         raise ToolError(f"파일을 찾을 수 없습니다: {p.name}")
     if p.stat().st_size > MAX_PDF_BYTES:
         raise ToolError(f"파일이 너무 큽니다(32MB 초과): {p.name}")
-    return block_from_bytes(p.read_bytes(), p.name)
-
-
-def source_block(src: str) -> dict:
-    """원격 MCP 입력(http(s) URL 또는 data: URI) → 입력 블록."""
-    data, name = fetch_source(src)
-    return block_from_bytes(data, name)
+    return p.read_bytes(), p.name
 
 
 # ---------- Claude 호출 ----------

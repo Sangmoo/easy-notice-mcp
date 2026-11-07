@@ -53,3 +53,53 @@ NOTICE_SCHEMA = {
         "payment_methods", "glossary", "scam_signals", "unclear_parts",
     ],
 }
+
+
+# ---------- 추가 필드 ----------
+
+# 음성 안내 첫 문장 (기한·금액은 코드가 검증한 값으로 따로 읽어 준다)
+NOTICE_SCHEMA["properties"]["voice_summary"] = {
+    "type": "string",
+    "description": "음성 안내용 첫 문장. 이 문서가 무엇이고 무엇을 해야 하는지 30자 안팎의 한 문장, 해요체. "
+                   "숫자·날짜·금액·개인정보는 넣지 않는다(따로 읽어 줌). 예: '자동차세를 내라는 고지서예요'",
+}
+
+# Claude 모드에서 개인정보 위치를 받아 사용자용 사본을 가릴 때만 쓰는 필드
+PII_REGIONS_SCHEMA = {
+    "type": "array",
+    "description": "이미지에서 개인정보 값이 적힌 영역. 없으면 빈 배열",
+    "items": {
+        "type": "object",
+        "properties": {
+            "page": {"type": "integer", "description": "이미지 순서 (1부터)"},
+            "box": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "[왼쪽, 위, 오른쪽, 아래]. 이미지 왼쪽 위가 (0,0), 오른쪽 아래가 (1000,1000)인 정수 좌표",
+            },
+            "kind": {"type": "string", "enum": ["주민등록번호", "전화번호", "계좌번호", "이름", "주소", "기타"]},
+        },
+        "required": ["page", "box", "kind"],
+    },
+}
+
+
+def schema_for(find_pii: bool) -> dict:
+    """find_pii면 pii_regions를 필수로 추가한 스키마 사본."""
+    if not find_pii:
+        return NOTICE_SCHEMA
+    schema = {**NOTICE_SCHEMA, "properties": {**NOTICE_SCHEMA["properties"], "pii_regions": PII_REGIONS_SCHEMA}}
+    schema["required"] = [*NOTICE_SCHEMA["required"], "pii_regions"]
+    return schema
+
+
+PROMPT_ALREADY_REDACTED = (
+    "\n문서 이미지의 검은 상자는 개인정보(이름·주소·주민번호·전화번호·계좌번호)를 미리 가린 부분이다. "
+    "읽으려 하거나 추측하지 말고, unclear_parts에도 넣지 않는다."
+)
+
+PROMPT_FIND_PII = (
+    "\npii_regions에는 각 이미지에서 개인정보 '값'(이름, 주소, 주민등록번호, 개인 전화번호, 계좌번호)이 적힌 영역을 "
+    "이미지 왼쪽 위 (0,0)·오른쪽 아래 (1000,1000) 기준 정수 좌표로 적는다. 라벨 글자('성명', '주소' 등)는 빼고 값만 감싼다. "
+    "기관 대표번호, 납부 금액, 날짜, 납부번호는 개인정보가 아니다."
+)

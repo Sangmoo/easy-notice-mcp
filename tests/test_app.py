@@ -1,8 +1,10 @@
-"""앱·MCP 검증.
+"""앱·처리 흐름·MCP 검증 (가짜 Claude + 가짜 GPU 모델).
 
-1) 가짜 Anthropic 클라이언트로 입력 변환 → structured outputs 호출 → 검증·마스킹 → 결과 조립
-2) API 키: 사용자 본인 키 필수 (서버 키로 대신하지 않음)
-3) 실제로 Gradio 서버를 띄워 원격 MCP(streamable HTTP)로 툴 목록·호출·헤더 전달 확인
+1) 처리 방식(자동/GPU/Claude API) 선택과 GPU 실패 시 Claude 대체
+2) 개인정보: GPU 방식은 Claude에 보내기 '전에' 가림, Claude 방식은 Claude 좌표로 공유용 사본만 가림
+3) structured outputs 사용, API 키 필수, 입력 보안(로컬 경로·내부망 차단)
+4) 웹 UI 출력, 음성(GPU/브라우저 대체)
+5) 실제 Gradio 서버를 띄워 원격 MCP(streamable HTTP) 호출
 """
 import asyncio
 import base64
@@ -14,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import gradio as gr
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -22,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 
 import app  # noqa: E402
 import claude_util  # noqa: E402
+import models  # noqa: E402
+import pipeline  # noqa: E402
 from errors import ToolError  # noqa: E402
 
 FAKE_OUTPUT = {
@@ -30,8 +35,26 @@ FAKE_OUTPUT = {
     "deadline": "2099-12-10", "deadline_original_text": "12월 10일", "amount_krw": 87650,
     "amount_original_text": None, "payment_methods": ["자동이체"], "if_missed": None,
     "contact": "1577-1000 / 담당자 010-2222-3333", "glossary": [],
-    "scam_signals": [], "unclear_parts": [],
+    "scam_signals": [], "unclear_parts": [], "voice_summary": "건강보험료를 내라는 안내예요",
 }
+KEY = "sk-ant-test-key"
+
+
+def _png(w=1200, h=1600) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), "white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _pdf(pages=2) -> bytes:
+    buf = io.BytesIO()
+    imgs = [Image.new("RGB", (600, 800), "white") for _ in range(pages)]
+    imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])
+    return buf.getvalue()
+
+
+def _data_uri(data: bytes, mime="image/png") -> str:
+    return f"data:{mime};base64," + base64.b64encode(data).decode()
 
 
 class FakeMessages:
@@ -44,71 +67,165 @@ class FakeMessages:
         return SimpleNamespace(stop_reason=self.stop_reason, content=[SimpleNamespace(type="text", text=text)])
 
 
-def _data_uri(kind: str = "image/png") -> str:
-    if kind == "application/pdf":
-        return "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4\n%test\n").decode()
-    buf = io.BytesIO()
-    Image.new("RGB", (800, 1100), "white").save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
-
 @pytest.fixture
-def files(tmp_path):
-    img = tmp_path / "page1.png"
-    Image.new("RGBA", (2400, 3400), (255, 255, 255, 255)).save(img)
-    pdf = tmp_path / "page2.pdf"
-    pdf.write_bytes(b"%PDF-1.4\n%test\n")
-    return [str(img), str(pdf)]
-
-
-@pytest.fixture
-def fake(monkeypatch):
-    messages = FakeMessages(FAKE_OUTPUT)
-    seen = {}
+def claude(monkeypatch):
+    """가짜 Claude. 받은 키는 claude.seen['key']에."""
+    messages = FakeMessages(dict(FAKE_OUTPUT))
+    messages.seen = {}
+    real = claude_util.resolve_client
 
     def fake_resolve(key):
-        seen["key"] = key
+        real(key)  # 키 필수·형식 검사는 진짜 함수로
+        messages.seen["key"] = key
         return SimpleNamespace(messages=messages)
 
-    monkeypatch.setattr(app, "resolve_client", fake_resolve)
-    messages.seen = seen
+    monkeypatch.setattr(pipeline, "resolve_client", fake_resolve)
     return messages
 
 
-# ---------- 1) 전체 흐름 ----------
+@pytest.fixture
+def gpu(monkeypatch):
+    """가짜 GPU 모델: 모든 페이지에서 (100,100)-(500,140)에 주민번호가 있다고 OCR."""
+    calls = SimpleNamespace(prepare=[], tts=[], fail=False)
 
-def test_full_flow_uses_structured_outputs(files, fake):
-    data = app.run_explain(files, app.file_block, "보통", "sk-ant-test")
-    call = fake.calls[0]
-    # Sonnet/Opus 5.5가 거부하는 강제 tool_choice를 쓰지 않는다
+    def prepare(images, flags, do_ocr):
+        if calls.fail:
+            raise RuntimeError("ZeroGPU quota exceeded")
+        calls.prepare.append((len(images), list(flags), do_ocr))
+        out = [im.resize((im.width * 2, im.height * 2)) if f else im for im, f in zip(images, flags)]
+        ocr = [[([[100, 100], [500, 100], [500, 140], [100, 140]], "900101-1234567", 0.9)] if do_ocr else [] for _ in out]
+        return out, ocr
+
+    def tts(speech):
+        if calls.fail:
+            raise RuntimeError("ZeroGPU quota exceeded")
+        calls.tts.append(speech)
+        return 16000, np.zeros(1600, dtype=np.float32)
+
+    monkeypatch.setattr(models, "gpu_prepare", prepare)
+    monkeypatch.setattr(models, "gpu_tts", tts)
+    return calls
+
+
+def _sent_images(call):
+    return [Image.open(io.BytesIO(base64.b64decode(b["source"]["data"])))
+            for b in call["messages"][0]["content"] if b["type"] == "image"]
+
+
+# ---------- 1·2) 처리 방식과 개인정보 가림 ----------
+
+def test_auto_gpu_redacts_before_sending(claude, gpu):
+    out = pipeline.explain([(_png(), "a.png")], "보통", KEY)
+    call = claude.calls[0]
+    assert out.route == "gpu"
+    assert gpu.prepare == [(1, [False], True)]
+    # Claude가 받은 이미지에서 주민번호 자리가 이미 검게 칠해져 있다
+    img = _sent_images(call)[0]
+    sx = img.width / 1200
+    assert np.asarray(img)[int(120 * sx), int(400 * sx)].max() < 40
+    assert "미리 가린 부분" in call["system"] and "pii_regions" not in call["output_config"]["format"]["schema"]["properties"]
     assert "tool_choice" not in call and "tools" not in call
-    fmt = call["output_config"]["format"]
-    assert fmt["type"] == "json_schema"
-    assert fmt["schema"]["additionalProperties"] is False
-    assert fmt["schema"]["properties"]["glossary"]["items"]["additionalProperties"] is False
-    assert call["system"].endswith(app.LEVEL_GUIDE["보통"])
-    blocks = call["messages"][0]["content"]
-    assert [b["type"] for b in blocks] == ["image", "document", "text"]
-    img = Image.open(io.BytesIO(base64.b64decode(blocks[0]["source"]["data"])))
-    assert max(img.size) == claude_util.MAX_SIDE
-
-    assert data["contact"] == "1577-1000 / 담당자 010-****-3333"
-    assert data["d_day"]["status"] == "upcoming"
-    assert data["validation_warnings"] == ["기한 연도(2099년)가 예상 범위를 벗어납니다. 원본에서 연도를 확인하세요."]
+    assert any("1곳을 가린 뒤" in n for n in out.notes)
+    assert out.voice["text"].startswith("건강보험료를 내라는 안내예요.")
+    assert out.data["contact"] == "1577-1000 / 담당자 010-****-3333"
 
 
-def test_ui_function_outputs(files, fake):
-    md, data = app.explain_upload(files, "아주 쉽게", "sk-ant-ui-key")
-    assert md.startswith("## 건강보험료 고지서") and "87,650원" in md and "010-2222-3333" not in md
-    assert fake.seen["key"] == "sk-ant-ui-key"  # 화면에 입력한 키 사용
-    assert data["amount_krw"] == 87650
+def test_low_res_photo_is_upscaled(claude, gpu):
+    out = pipeline.explain([(_png(600, 800), "small.png")], "보통", KEY, redact=False)
+    assert gpu.prepare == [(1, [True], False)]
+    assert out.images[0].size == (1200, 1600)
+    assert any("2배 확대" in n for n in out.notes)
 
 
-def test_mcp_function_with_data_uri(fake):
-    out = app.explain_notice([_data_uri(), _data_uri("application/pdf")], "보통", "sk-ant-test")
-    assert out.startswith("## 건강보험료 고지서") and "```json" in out
-    assert fake.seen["key"] == "sk-ant-test"
-    assert [b["type"] for b in fake.calls[0]["messages"][0]["content"]] == ["image", "document", "text"]
+def test_no_gpu_work_goes_straight_to_claude(claude, gpu):
+    out = pipeline.explain([(_pdf(), "doc.pdf")], "보통", KEY, redact=False, enhance=True)
+    assert out.route == "claude" and gpu.prepare == []
+    assert [b["type"] for b in claude.calls[0]["messages"][0]["content"]] == ["document", "text"]  # PDF 원본 그대로
+
+
+def test_pdf_pages_rendered_for_redaction(claude, gpu):
+    out = pipeline.explain([(_pdf(3), "doc.pdf")], "보통", KEY)
+    assert gpu.prepare == [(3, [False, False, False], True)]  # PDF 페이지는 확대하지 않음
+    assert [b["type"] for b in claude.calls[0]["messages"][0]["content"]] == ["image"] * 3 + ["text"]
+    assert len(out.images) == 3
+
+
+def _claude_with_regions(claude):
+    claude.output = {**FAKE_OUTPUT, "pii_regions": [
+        {"page": 1, "box": [100, 100, 400, 150], "kind": "주민등록번호"},
+        {"page": 9, "box": [0, 0, 10, 10], "kind": "이름"},
+    ]}
+
+
+def test_auto_falls_back_to_claude_when_gpu_fails(claude, gpu):
+    gpu.fail = True
+    _claude_with_regions(claude)
+    out = pipeline.explain([(_png(), "a.png")], "보통", KEY)
+    call = claude.calls[0]
+    assert out.route == "claude"
+    assert any("GPU를 지금 쓸 수 없어" in n for n in out.notes)
+    assert "pii_regions" in call["output_config"]["format"]["schema"]["required"]
+    assert "pii_regions" in call["system"]
+    # Claude에는 원본이 갔고, 사용자 사본은 Claude 좌표로 가림
+    assert np.asarray(_sent_images(call)[0]).min() > 200
+    shared = np.asarray(out.images[0])
+    assert shared[int(1600 * 0.125), int(1200 * 0.25)].max() < 40
+    assert "pii_regions" not in out.data
+    assert any("공유용 사본" in n and "1곳" in n for n in out.notes)
+
+
+def test_gpu_mode_failure_is_an_error(claude, gpu):
+    gpu.fail = True
+    with pytest.raises(ToolError, match="GPU 처리에 실패"):
+        pipeline.explain([(_png(), "a.png")], "보통", KEY, mode="무료 모델(GPU)")
+    assert claude.calls == []
+
+
+def test_claude_mode_never_uses_gpu(claude, gpu):
+    _claude_with_regions(claude)
+    out = pipeline.explain([(_png(), "a.png")], "보통", KEY, mode="Claude API")
+    assert out.route == "claude" and gpu.prepare == []
+    assert pipeline.speak(out, "Claude API") == (None, "Claude API 방식에서는 '🔊 브라우저로 읽기'로 들어 주세요.")
+    assert gpu.tts == []
+
+
+def test_auto_many_pages_use_claude(claude, gpu):
+    _claude_with_regions(claude)
+    out = pipeline.explain([(_pdf(5), "doc.pdf")], "보통", KEY)
+    assert out.route == "claude" and gpu.prepare == []
+    assert any("페이지가 많아(5쪽)" in n for n in out.notes)
+
+
+def test_speak(claude, gpu):
+    out = pipeline.explain([(_png(), "a.png")], "보통", KEY)
+    audio, note = pipeline.speak(out, "자동")
+    assert audio[0] == 16000 and note is None
+    assert gpu.tts == [out.voice["speech"]] and not any(c.isdigit() for c in gpu.tts[0])
+    gpu.fail = True
+    assert pipeline.speak(out, "자동")[0] is None
+
+
+@pytest.mark.parametrize("stop, text, msg", [
+    ("refusal", "{}", "거절"),
+    ("max_tokens", '{"doc_type": "자', "잘렸습니다"),
+    ("end_turn", "not json", "해석하지 못했습니다"),
+])
+def test_bad_responses(stop, text, msg):
+    client = SimpleNamespace(messages=FakeMessages(text, stop_reason=stop))
+    with pytest.raises(ToolError, match=msg):
+        claude_util.call_structured(client, "s", [], pipeline.schema_for(False))
+
+
+# ---------- 3) 키·입력 ----------
+
+def test_api_key_required(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-should-be-ignored")
+    for missing in (None, "", "   "):
+        with pytest.raises(ToolError, match="API 키가 필요합니다"):
+            claude_util.resolve_client(missing)
+    with pytest.raises(ToolError, match="형식"):
+        claude_util.resolve_client("abc123")
+    assert claude_util.resolve_client(" sk-ant-user ").api_key == "sk-ant-user"
 
 
 @pytest.mark.parametrize("src, msg", [
@@ -127,58 +244,42 @@ def test_fetch_source_rejects_unsafe(src, msg):
         claude_util.fetch_source(src)
 
 
-def test_errors_become_gr_error(tmp_path, fake):
+# ---------- 4) 웹 UI·MCP 함수 ----------
+
+def test_ui_outputs(tmp_path, claude, gpu):
+    f = tmp_path / "a.png"
+    f.write_bytes(_png())
+    status, vtext, vspeech, audio, md, gallery, data = app.explain_upload(
+        [str(f)], "아주 쉽게", "자동", ["개인정보 가리기", "사진 보정", "음성 안내"], KEY)
+    assert "가린 뒤" in status
+    assert vtext.startswith("건강보험료를 내라는 안내예요.") and "팔만 칠천육백오십 원" in vspeech
+    assert audio[0] == 16000 and len(gallery) == 1
+    assert md.startswith("## 건강보험료 고지서") and "010-2222-3333" not in md
+    assert claude.seen["key"] == KEY
+
+
+def test_ui_errors(tmp_path, claude, gpu):
     with pytest.raises(gr.Error, match="1개 이상"):
-        app.explain_notice([], "보통", None)
-    with pytest.raises(gr.Error, match="1개 이상"):
-        app.explain_upload(None, "보통", "sk-ant-x")
+        app.explain_upload(None, "보통", "자동", [], KEY)
+    f = tmp_path / "a.png"
+    f.write_bytes(_png())
+    with pytest.raises(gr.Error, match="API 키가 필요합니다"):
+        app.explain_upload([str(f)], "보통", "자동", [], "")
     bad = tmp_path / "bad.jpg"
     bad.write_bytes(b"not an image")
     with pytest.raises(gr.Error, match="읽을 수 없습니다"):
-        app.explain_upload([str(bad)], "보통", "sk-ant-x")
+        app.explain_upload([str(bad)], "보통", "자동", [], KEY)
+
+
+def test_mcp_function(claude, gpu):
+    out = app.explain_notice([_data_uri(_png()), _data_uri(_pdf(1), "application/pdf")], "보통", "자동", True, True, KEY)
+    assert "### 🔊 음성 안내" in out and "## 건강보험료 고지서" in out and "```json" in out
+    assert "가린 뒤" in out
     with pytest.raises(gr.Error, match="URL 또는 data: URI"):
-        app.explain_notice([str(bad)], "보통", "sk-ant-x")  # 원격 호출자는 서버 로컬 경로를 못 읽음  # 원격 호출자는 서버 로컬 경로를 못 읽음
-    assert fake.calls == []  # 파일 오류는 Claude를 부르기 전에 걸러짐
+        app.explain_notice(["/proc/self/environ"], "보통", "자동", True, True, KEY)
 
 
-@pytest.mark.parametrize("stop, text, msg", [
-    ("refusal", "{}", "거절"),
-    ("max_tokens", '{"doc_type": "자', "잘렸습니다"),
-    ("end_turn", "not json", "해석하지 못했습니다"),
-])
-def test_bad_responses(stop, text, msg):
-    client = SimpleNamespace(messages=FakeMessages(text, stop_reason=stop))
-    with pytest.raises(ToolError, match=msg):
-        claude_util.call_structured(client, "s", [], app.NOTICE_SCHEMA)
-
-
-# ---------- 2) API 키 결정 ----------
-
-def test_resolve_client_requires_user_key(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-should-be-ignored")
-    for missing in (None, "", "   "):
-        with pytest.raises(ToolError, match="API 키가 필요합니다"):
-            claude_util.resolve_client(missing)
-    with pytest.raises(ToolError, match="형식"):
-        claude_util.resolve_client("abc123")
-    assert claude_util.resolve_client(" sk-ant-user ").api_key == "sk-ant-user"
-
-
-def test_missing_key_in_ui_and_tool(files, monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-should-be-ignored")
-    with pytest.raises(gr.Error, match="API 키가 필요합니다"):
-        app.explain_upload(files, "보통", "")
-    with pytest.raises(gr.Error, match="API 키가 필요합니다"):
-        app.explain_notice([_data_uri()], "보통", None)
-
-
-def test_zerogpu_placeholder_registered():
-    """ZeroGPU 시작 검사용 @spaces.GPU 함수가 있다 (로컬에선 spaces가 있을 때만)."""
-    if app.spaces is not None:
-        assert callable(app._zerogpu_placeholder)
-
-
-# ---------- 3) 원격 MCP (실제 Gradio 서버) ----------
+# ---------- 5) 원격 MCP (실제 Gradio 서버) ----------
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -187,57 +288,41 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def server(fake, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+def server():
     port = _free_port()
     app.demo.launch(server_name="127.0.0.1", server_port=port, mcp_server=True, prevent_thread_lock=True, quiet=True)
     yield f"http://127.0.0.1:{port}"
     app.demo.close()
 
 
-def test_remote_mcp(server, fake):
+def _mcp(server, headers, args):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
-    async def run(headers):
+    async def run():
         async with streamablehttp_client(f"{server}/gradio_api/mcp/", headers=headers) as (r, w, _):
             async with ClientSession(r, w) as s:
                 await s.initialize()
                 tools = (await s.list_tools()).tools
-                res = await s.call_tool("explain_notice", {"files": [_data_uri()], "reading_level": "보통"})
-                return tools, res
+                return tools, await s.call_tool(tools[0].name, args)
 
-    tools, res = asyncio.run(run({"X-Anthropic-Key": "sk-ant-from-header"}))
-    names = [t.name for t in tools]
-    assert names == ["explain_notice"]  # 웹 UI용 핸들러는 노출되지 않음
-    tool = tools[names.index("explain_notice")]
-    assert "x_anthropic_key" not in tool.inputSchema["properties"]  # 헤더는 툴 인자가 아님
+    return asyncio.run(run())
+
+
+def test_remote_mcp(server, claude, gpu):
+    tools, res = _mcp(server, {"X-Anthropic-Key": KEY}, {"files": [_data_uri(_png())], "mode": "자동"})
+    assert [t.name for t in tools] == ["explain_notice"]  # 웹 UI용 핸들러는 노출되지 않음
+    props = tools[0].inputSchema["properties"]
+    assert set(props) == {"files", "reading_level", "mode", "redact", "enhance"}  # 키는 헤더로만
+    assert props["mode"]["enum"] == ["자동", "무료 모델(GPU)", "Claude API"]
     assert not res.isError, res.content
-    text = "\n".join(c.text for c in res.content if c.type == "text")
+    text = res.content[0].text
     assert "건강보험료 고지서" in text and "010-****-3333" in text and "010-2222-3333" not in text
-    assert fake.seen["key"] == "sk-ant-from-header"  # MCP 헤더가 그대로 전달됨
-    blocks = fake.calls[-1]["messages"][0]["content"]
-    assert blocks[0]["type"] == "image"  # data: URI가 이미지로 변환됨
+    assert claude.seen["key"] == KEY and gpu.prepare
 
 
-def test_remote_mcp_without_key(server, monkeypatch):
-    """헤더가 없으면 (서버에 키가 있어도) 키가 필요하다는 오류가 MCP 툴 오류로 돌아온다."""
+def test_remote_mcp_without_key(server, claude, gpu, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-should-be-ignored")
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
-
-    app_resolve = app.resolve_client
-    try:
-        app.resolve_client = claude_util.resolve_client
-
-        async def run():
-            async with streamablehttp_client(f"{server}/gradio_api/mcp/") as (r, w, _):
-                async with ClientSession(r, w) as s:
-                    await s.initialize()
-                    return await s.call_tool("explain_notice", {"files": [_data_uri()]})
-
-        res = asyncio.run(run())
-    finally:
-        app.resolve_client = app_resolve
-    assert res.isError
-    assert "API 키가 필요합니다" in res.content[0].text
+    _, res = _mcp(server, {}, {"files": [_data_uri(_png())]})
+    assert res.isError and "API 키가 필요합니다" in res.content[0].text
+    assert claude.calls == [] and gpu.prepare == []

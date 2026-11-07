@@ -26,6 +26,26 @@ tags:
 - 개인 계좌 입금 요구, 출처 불명 링크 등 사기 의심 신호 경고
 - 주민등록번호·휴대전화 번호 자동 마스킹 (Claude가 옮겨 적어도 코드가 한 번 더 가림)
 - 읽어 온 값 검증: 존재하지 않는 날짜, 비정상 연도·금액은 "원본 확인 필요"로 표시
+- **ZeroGPU 무료 모델**
+  1. 개인정보 먼저 가리기: OCR로 이름·주소·주민번호·휴대폰·계좌번호 '값'만 찾아 검게 칠한 뒤 Claude에 보냄 (라벨·금액·기관 번호는 남김)
+  2. 짧은 음성 안내: "무엇인지 + 기한 + 금액"을 최대 4문장으로. 기한·금액은 코드가 검증한 값을 한글 수사로 읽음
+  3. 사진 보정: 문서 원근·대비 보정(CPU) + 저해상도 사진 2배 확대(GPU)
+
+## 처리 방식
+
+| 방식 | 개인정보 가림 | 음성 | 화질 |
+|---|---|---|---|
+| **자동**(추천) | GPU OCR로 가린 뒤 전송 | GPU TTS | CPU 보정 + GPU 확대 |
+| 무료 모델(GPU) | 위와 같음 (GPU 실패 시 오류) | GPU TTS | 위와 같음 |
+| Claude API | 원본 전송, Claude가 찾은 위치로 **공유용 사본**만 가림 | 브라우저 음성(웹)·안내 문장(MCP) | CPU 보정만 |
+
+자동 모드는 GPU 사용량이 큰 작업(이미지 5쪽 이상)이거나 GPU를 쓸 수 없을 때(ZeroGPU 하루 사용량: 비로그인 2분·무료 계정 5분) Claude API 방식으로 넘어갑니다.
+
+| 기능 | 모델 | 라이선스 |
+|---|---|---|
+| OCR(개인정보 위치) | EasyOCR ko+en | Apache-2.0 |
+| 2배 확대 | caidas/swin2SR-classical-sr-x2-64 | Apache-2.0 |
+| 음성 | facebook/mms-tts-kor | CC-BY-NC-4.0 (비상업 무료) |
 
 ## MCP 연결 (원격)
 
@@ -68,11 +88,13 @@ Claude Code: `claude mcp add --transport http easy-notice https://sangmoo-easy-n
 
 ### 툴
 
-`explain_notice(files, reading_level="아주 쉽게")` — HF Space에서는 Space 이름이 붙어 `easy_notice_mcp_explain_notice`로 표시됩니다(클라이언트가 자동으로 인식).
+`explain_notice(files, reading_level="아주 쉽게", mode="자동", redact=True, enhance=True)` — HF Space에서는 Space 이름이 붙어 `easy_notice_mcp_explain_notice`로 표시됩니다(클라이언트가 자동으로 인식).
 
 - `files`: 문서 사진 또는 PDF 1~5개 — 공개 **http(s) URL** 또는 **data: URI** (`data:image/jpeg;base64,...`, `data:application/pdf;base64,...`)
 - `reading_level`: `아주 쉽게` | `보통`
-- 결과: 마크다운 설명 + 구조화된 JSON
+- `mode`: `자동` | `무료 모델(GPU)` | `Claude API`
+- `redact`: 개인정보 가리기, `enhance`: 사진 보정
+- 결과: 처리 방식 안내 + 짧은 음성 안내 문장 + 마크다운 설명 + 구조화된 JSON (음성 파일·가린 이미지는 웹 화면에서 제공)
 
 보안상 서버의 로컬 파일 경로나 내부 네트워크 주소(127.0.0.1, 10.x, 169.254.x 등)는 받지 않습니다.
 
@@ -88,6 +110,10 @@ Claude 응답은 structured outputs(`output_config.format`, JSON Schema)로 받�
 
 ```
 ├── app.py          # Gradio UI + MCP 툴 (진입점)
+├── pipeline.py     # 처리 방식 선택, GPU 실패 시 Claude 대체, 가림·음성 조립
+├── models.py       # ZeroGPU 무료 모델 (EasyOCR·Swin2SR·MMS-TTS)과 @spaces.GPU 함수
+├── vision.py       # 페이지 준비, 원근·대비 보정, OCR 결과에서 개인정보 찾기·가리기
+├── voice.py        # 짧은 음성 안내 문장, 숫자 → 한글 수사
 ├── prompts.py      # 시스템 프롬프트, 난이도 가이드, 출력 JSON 스키마
 ├── claude_util.py  # 본인 API 키 확인, 파일/URL 입력, structured outputs 호출
 ├── validate.py     # 스키마 기준 출력 정규화, API용 스키마 변환
@@ -98,8 +124,7 @@ Claude 응답은 structured outputs(`output_config.format`, JSON Schema)로 받�
 
 ## Space 설정
 
-- 하드웨어: ZeroGPU. 이 앱은 GPU를 쓰지 않지만 ZeroGPU Space는 시작할 때 `@spaces.GPU` 함수가 하나 있어야 해서,
-  `app.py`에 호출하지 않는 자리표시 함수(`_zerogpu_placeholder`)를 두었습니다. GPU 할당량은 쓰지 않습니다.
+- 하드웨어: ZeroGPU. 모델은 시작할 때 GPU용으로 올려 두고 `@spaces.GPU` 함수(`gpu_prepare`, `gpu_tts`) 안에서만 실행합니다.
 - Secret 불필요. (선택) Variable `CLAUDE_MODEL` — 기본 `claude-sonnet-5-5`
 
 ## 로컬 실행·테스트
@@ -110,6 +135,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 python app.py                     # http://127.0.0.1:7860, MCP: /gradio_api/mcp/
 python -m pytest -q
+RUN_MODEL_TESTS=1 python -m pytest -q -k real_ocr   # 실제 OCR로 가림 확인 (모델 다운로드, 한글 글꼴 필요)
 ```
 
 정리 결과는 참고용입니다. 납부 전에는 고지서 원본이나 기관 공식 홈페이지에서 금액과 기한을 확인하세요.
