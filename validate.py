@@ -1,7 +1,7 @@
-"""Claude 출력 검증·정규화 (두 프로젝트 공통, src/lib/validate.ts와 동작 동일).
+"""Claude 출력 검증·정규화.
 
-tool_choice로 스키마를 강제해도 모델이 타입을 어기거나(숫자를 "12,000원" 문자열로),
-배열 대신 문자열을 넣거나, enum 밖의 값을 줄 수 있다. 결과를 쓰기 전에 스키마 기준으로
+structured outputs로 형식은 보장되지만, 값이 어긋날 수 있다(숫자를 "12,000원" 문자열로 주거나,
+빈 문자열을 null 대신 넣는 등). 또 테스트·다른 경로로 들어온 값도 같은 기준으로 맞춘다. 결과를 쓰기 전에 스키마 기준으로
 한 번 더 맞춘다. 필수 문자열이 비어 있으면 결과를 신뢰할 수 없으므로 오류로 처리한다.
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 
-from claude_util import ToolError
+from errors import ToolError
 
 _NUM_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
@@ -112,3 +112,25 @@ def normalize(data: dict, schema: dict) -> dict:
     if not isinstance(data, dict):
         raise ToolError("Claude 응답 형식이 올바르지 않습니다. 다시 시도해주세요.")
     return _coerce_object(data, schema)
+
+
+# structured outputs가 받지 않는 키워드 (SDK 문서의 JSON Schema 제약)
+_UNSUPPORTED = {"default", "minimum", "maximum", "multipleOf", "minLength", "maxLength", "minItems", "maxItems"}
+
+
+def to_api_schema(schema):
+    """output_config.format용 스키마: 모든 object에 additionalProperties: false, 미지원 키워드 제거.
+
+    원본 스키마(enum 기본값 등)는 normalize()에서 그대로 쓰고, API에는 이 사본을 보낸다.
+    """
+    if isinstance(schema, list):
+        return [to_api_schema(s) for s in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {k: to_api_schema(v) for k, v in schema.items() if k not in _UNSUPPORTED}
+    if out.get("properties") is not None:  # properties의 키는 필드 이름이라 위 필터와 무관
+        out["properties"] = {k: to_api_schema(v) for k, v in schema["properties"].items()}
+    types = out.get("type")
+    if types == "object" or (isinstance(types, list) and "object" in types):
+        out["additionalProperties"] = False
+    return out

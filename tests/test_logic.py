@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "mcp_server"))
+sys.path.insert(0, str(ROOT))
 
-from claude_util import ToolError  # noqa: E402
+from errors import ToolError  # noqa: E402
 from logic import d_day_info, finalize, mask, render  # noqa: E402
 from prompts import LEVEL_GUIDE, NOTICE_SCHEMA  # noqa: E402
 from validate import normalize  # noqa: E402
