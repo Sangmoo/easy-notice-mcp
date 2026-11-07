@@ -55,3 +55,10 @@ def test_schema_and_levels():
     props = NOTICE_SCHEMA["properties"]
     assert set(NOTICE_SCHEMA["required"]) <= set(props)
     assert list(LEVEL_GUIDE) == ["아주 쉽게", "보통"]
+
+
+def test_prompt_has_korean_scam_patterns():
+    from prompts import SYSTEM_PROMPT_BASE
+
+    for phrase in ["APK", "보안 고지서", "문자 메시지의 링크", "교통민원24", "118"]:
+        assert phrase in SYSTEM_PROMPT_BASE

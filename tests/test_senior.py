@@ -56,7 +56,8 @@ def test_card_scam_and_escaping():
             "d_day": {"date": "2026-11-08", "days_left": 1, "label": "D-1", "status": "upcoming"}}
     html = senior.card_html(data)
     assert "사기일 수 있어요" in html
-    assert 'href="tel:112"' in html and 'href="tel:1332"' in html and 'href="tel:0231538000"' in html
+    assert 'href="tel:112"' in html and 'href="tel:1332"' in html and 'href="tel:118"' in html
+    assert 'href="tel:0231538000"' in html and "118에 알리세요" in html
     assert "<script>" not in html and "&lt;script&gt;" in html
     assert "nc-box danger" in html
 

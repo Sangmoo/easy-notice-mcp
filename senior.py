@@ -12,7 +12,8 @@ import urllib.parse
 import uuid
 from pathlib import Path
 
-SCAM_CALLS = [("경찰 112", "112"), ("금융감독원 1332", "1332")]
+# 사기 의심 시 바로 걸 수 있는 번호: 경찰, 금융감독원(돈을 보냈을 때), 한국인터넷진흥원(링크·앱 설치 스미싱)
+SCAM_CALLS = [("경찰 112", "112"), ("금융감독원 1332", "1332"), ("스미싱 신고 118", "118")]
 
 # 기관 대표번호·유선번호 (가려진 번호·휴대폰은 제외)
 _PHONE = re.compile(r"(?<![\d*])(?:0(?:2|[3-6]\d|70|80)-?\d{3,4}-?\d{4}|1[5-9]\d{2}-?\d{4})(?![\d*])")
@@ -104,7 +105,8 @@ def card_html(data: dict) -> str:
         reasons = "".join(f"<li>{_e(s)}</li>" for s in data["scam_signals"])
         parts.append(
             '<div class="nc-scam" role="alert"><h3>🚨 사기일 수 있어요! 돈을 보내지 마세요</h3>'
-            f"<ul>{reasons}</ul>먼저 기관 대표번호로 직접 확인하세요.<div class=\"nc-calls\">{calls}</div></div>"
+            f"<ul>{reasons}</ul>먼저 기관 대표번호로 직접 확인하세요. 링크를 눌렀거나 앱을 깔았다면 118에 알리세요."
+            f"<div class=\"nc-calls\">{calls}</div></div>"
         )
     parts.append(f'<p class="nc-title">{_e(data.get("doc_type"))}</p>')
     if data.get("one_line_summary"):
