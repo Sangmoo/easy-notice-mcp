@@ -1,8 +1,8 @@
 ---
 title: 고지서 공문서 쉬운 말 풀이 MCP
 emoji: 📮
-colorFrom: pink
-colorTo: green
+colorFrom: gray
+colorTo: yellow
 sdk: gradio
 sdk_version: 6.31.0
 python_version: '3.12'
@@ -63,7 +63,8 @@ Claude Desktop (`claude_desktop_config.json`, `mcp-remote`로 감싸기):
 
 Claude Code: `claude mcp add --transport http easy-notice https://sangmoo-easy-notice-mcp.hf.space/gradio_api/mcp/ --header "X-Anthropic-Key: sk-ant-..."`
 
-헤더 없이 연결하면 서버 데모 키(Space Secret)로 동작하며 하루 사용 횟수가 제한됩니다. 웹 화면도 데모 키를 씁니다.
+**본인 Anthropic API 키가 필수입니다.** MCP는 `X-Anthropic-Key` 헤더로, 웹 화면은 키 입력란으로 넣습니다.
+서버에는 키가 등록되어 있지 않으며(서버 키로 대신 처리하지 않음), 넣은 키는 요청 처리에만 쓰고 저장하거나 로그로 남기지 않습니다. 비용은 키 소유자 계정에 청구됩니다.
 
 ### 툴
 
@@ -88,22 +89,18 @@ Claude 응답은 structured outputs(`output_config.format`, JSON Schema)로 받�
 ```
 ├── app.py          # Gradio UI + MCP 툴 (진입점)
 ├── prompts.py      # 시스템 프롬프트, 난이도 가이드, 출력 JSON 스키마
-├── claude_util.py  # API 키 결정(헤더 → 데모 키+한도), 파일/URL 입력, structured outputs 호출
+├── claude_util.py  # 본인 API 키 확인, 파일/URL 입력, structured outputs 호출
 ├── validate.py     # 스키마 기준 출력 정규화, API용 스키마 변환
 ├── logic.py        # 마스킹, D-day, 이상값 검사, 결과 조립
 ├── errors.py
 └── tests/          # 데이터 검증 + 가짜 Claude로 전체 흐름 + 실제 원격 MCP(HTTP) 호출
 ```
 
-## Space 설정 (Settings → Variables and secrets)
+## Space 설정
 
-| 이름 | 종류 | 값 | 설명 |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | Secret | sk-ant-... | 헤더 없이 접속한 사용자·웹 화면용 데모 키. 없으면 BYOK 전용 |
-| `DEMO_DAILY_LIMIT` | Variable | 30 | 데모 키 하루 사용 횟수 (기본 30) |
-| `CLAUDE_MODEL` | Variable | claude-sonnet-5-5 | 선택 |
-
-하드웨어는 **CPU basic**이면 충분합니다(연산은 Claude API가 함).
+- 하드웨어: ZeroGPU. 이 앱은 GPU를 쓰지 않지만 ZeroGPU Space는 시작할 때 `@spaces.GPU` 함수가 하나 있어야 해서,
+  `app.py`에 호출하지 않는 자리표시 함수(`_zerogpu_placeholder`)를 두었습니다. GPU 할당량은 쓰지 않습니다.
+- Secret 불필요. (선택) Variable `CLAUDE_MODEL` — 기본 `claude-sonnet-5-5`
 
 ## 로컬 실행·테스트
 

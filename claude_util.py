@@ -1,6 +1,6 @@
 """Claude 호출 공통 유틸.
 
-- API 키 결정: MCP 헤더(X-Anthropic-Key) 우선, 없으면 Space Secret(하루 사용 한도 적용)
+- API 키: 사용자 본인 키 필수 (웹 화면 입력란 또는 MCP 헤더 X-Anthropic-Key)
 - 이미지/PDF(업로드 파일, 또는 원격 MCP의 http(s) URL·data: URI)를 Claude 입력 블록으로 변환
 - structured outputs(output_config.format)로 항상 스키마에 맞는 JSON을 받음
   (Sonnet 5.5 / Opus 5.5는 tool_choice로 툴 호출을 강제하는 방식을 400으로 거부한다)
@@ -15,7 +15,6 @@ import ipaddress
 import json
 import os
 import socket
-import threading
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -33,43 +32,25 @@ MAX_PDF_BYTES = 32 * 1024 * 1024  # Claude PDF 입력 한도
 
 KST = datetime.timezone(datetime.timedelta(hours=9))
 
-_lock = threading.Lock()
-_usage = {"date": None, "count": 0}
-
 
 def today_kst() -> datetime.date:
     return datetime.datetime.now(KST).date()
 
 
-def demo_daily_limit() -> int:
-    try:
-        return max(0, int(os.getenv("DEMO_DAILY_LIMIT", "30")))
-    except ValueError:
-        return 30
-
-
 def resolve_client(user_key: str | None) -> anthropic.Anthropic:
-    """사용자 키가 있으면 그 키로, 없으면 서버 키로(일일 한도 적용) 클라이언트 생성."""
-    if user_key and user_key.strip():
-        return anthropic.Anthropic(api_key=user_key.strip())
+    """사용자 본인의 Anthropic API 키로만 클라이언트를 만든다 (서버 키·데모 키 없음).
 
-    server_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-    if not server_key:
+    키는 요청 처리에만 쓰고 저장하거나 로그로 남기지 않는다.
+    """
+    key = (user_key or "").strip()
+    if not key:
         raise ToolError(
-            "API 키가 없습니다. MCP 설정의 X-Anthropic-Key 헤더에 본인 Anthropic API 키를 넣어주세요."
+            "Anthropic API 키가 필요합니다. "
+            "웹 화면에서는 키 입력란에, MCP에서는 X-Anthropic-Key 헤더에 본인 키를 넣어주세요."
         )
-
-    with _lock:
-        today = today_kst()
-        if _usage["date"] != today:
-            _usage["date"], _usage["count"] = today, 0
-        if _usage["count"] >= demo_daily_limit():
-            raise ToolError(
-                "오늘 데모 사용 한도가 끝났습니다. "
-                "MCP 설정의 X-Anthropic-Key 헤더에 본인 Anthropic API 키를 넣으면 계속 쓸 수 있습니다."
-            )
-        _usage["count"] += 1
-    return anthropic.Anthropic(api_key=server_key)
+    if not key.startswith("sk-ant-"):
+        raise ToolError("Anthropic API 키 형식이 아닙니다(sk-ant-로 시작). 키를 다시 확인해주세요.")
+    return anthropic.Anthropic(api_key=key)
 
 
 # ---------- 입력 파일 ----------

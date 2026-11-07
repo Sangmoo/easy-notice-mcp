@@ -11,6 +11,12 @@ D-day 계산·개인정보 마스킹·값 검증·결과 조립은 코드가 결
 """
 from __future__ import annotations
 
+# ZeroGPU Space는 gradio·torch보다 먼저 spaces를 import해야 한다. 로컬에서는 없어도 된다.
+try:
+    import spaces
+except ImportError:  # pragma: no cover - 로컬 실행
+    spaces = None
+
 import json
 from typing import Callable, Literal
 
@@ -29,8 +35,8 @@ def run_explain(sources: list[str], to_block: Callable[[str], dict], reading_lev
     if reading_level not in LEVEL_GUIDE:
         reading_level = LEVELS[0]
 
-    content = [to_block(s) for s in sources[:MAX_FILES]]  # 파일 오류는 데모 한도를 쓰기 전에 걸러낸다
-    client = resolve_client(api_key)
+    client = resolve_client(api_key)  # 키가 없으면 파일을 읽기 전에 바로 안내
+    content = [to_block(s) for s in sources[:MAX_FILES]]
     today = today_kst()
     content.append({"type": "text", "text": f"오늘 날짜는 {today.isoformat()}입니다. 이 문서를 정리해주세요."})
     raw = call_structured(
@@ -47,7 +53,7 @@ def explain_notice(
     reading_level: Literal["아주 쉽게", "보통"] = "아주 쉽게",
     x_anthropic_key: gr.Header = None,
 ) -> str:
-    """세금 고지서, 건강보험·국민연금 안내문, 과태료 통지서, 관공서 공문 등을 쉬운 말로 풀어 해야 할 일, 기한(D-day), 금액, 사기 의심 신호를 정리합니다. 주민등록번호·휴대전화 번호는 결과에서 가려집니다.
+    """세금 고지서, 건강보험·국민연금 안내문, 과태료 통지서, 관공서 공문 등을 쉬운 말로 풀어 해야 할 일, 기한(D-day), 금액, 사기 의심 신호를 정리합니다. 주민등록번호·휴대전화 번호는 결과에서 가려집니다. MCP 연결 설정의 X-Anthropic-Key 헤더에 본인 Anthropic API 키가 필요합니다.
 
     Args:
         files: 문서 사진 또는 PDF 1~5개. 각 항목은 공개 http(s) URL 또는 data: URI(예: "data:image/jpeg;base64,..." / "data:application/pdf;base64,..."). 여러 장짜리 문서는 모든 페이지를 함께 넣으세요.
@@ -63,10 +69,10 @@ def explain_notice(
     return render(data) + "\n\n## 정리 결과 JSON\n\n```json\n" + json.dumps(data, ensure_ascii=False, indent=2) + "\n```"
 
 
-def explain_upload(files: list[str] | None, reading_level: str):
-    """웹 UI용. 화면에서 입력한 키가 없으면 서버 데모 키(하루 한도)를 쓴다."""
+def explain_upload(files: list[str] | None, reading_level: str, api_key: str):
+    """웹 UI용. 화면에 입력한 본인 키로만 동작한다."""
     try:
-        data = run_explain(list(files or []), file_block, reading_level, None)
+        data = run_explain(list(files or []), file_block, reading_level, api_key)
     except ToolError as e:
         raise gr.Error(str(e), print_exception=False) from None
     return render(data), data
@@ -77,10 +83,16 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
         "# 📮 고지서·공문서 쉬운 말 풀이\n"
         "세금 고지서, 건강보험 안내문, 과태료 통지서, 관공서 공문을 올리면 "
         "**무엇을, 언제까지, 얼마를** 해야 하는지 쉽게 정리해 드립니다. "
-        "아래 **Use via API or MCP**에서 원격 MCP 서버로 연결할 수 있습니다."
+        "본인 Anthropic API 키가 필요합니다. 아래 **Use via API or MCP**에서 원격 MCP 서버로 연결할 수 있습니다."
     )
     with gr.Row():
         with gr.Column():
+            key_in = gr.Textbox(
+                label="Anthropic API 키 (필수)",
+                type="password",
+                placeholder="sk-ant-...",
+                info="요청 처리에만 쓰고 저장하지 않습니다. 비용은 키 소유자 계정에 청구됩니다. 발급: console.anthropic.com",
+            )
             files_in = gr.File(
                 label=f"고지서·공문 사진 또는 PDF (최대 {MAX_FILES}개)",
                 file_count="multiple",
@@ -89,19 +101,25 @@ with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) a
             )
             level_in = gr.Radio(LEVELS, value=LEVELS[0], label="설명 난이도")
             submit = gr.Button("쉽게 풀어주세요", variant="primary")
-            gr.Markdown(
-                "웹 화면은 서버 데모 키로 동작하며 하루 사용 횟수가 정해져 있습니다. "
-                "계속 쓰려면 MCP로 연결하고 `X-Anthropic-Key` 헤더에 본인 키를 넣으세요."
-            )
         with gr.Column():
             md_out = gr.Markdown(label="쉬운 말 풀이")
             json_out = gr.JSON(label="정리 결과")
-    submit.click(explain_upload, [files_in, level_in], [md_out, json_out], api_visibility="private")
+    submit.click(explain_upload, [files_in, level_in, key_in], [md_out, json_out], api_visibility="private")
     gr.Markdown(
         "<small>올린 문서는 저장하지 않으며(임시 파일은 1시간 안에 삭제), 주민등록번호·휴대전화 번호는 결과에서 자동으로 가려집니다. "
         "정리 결과는 참고용입니다. 납부 전에는 원본이나 기관 공식 홈페이지에서 금액과 기한을 확인하세요.</small>"
     )
     gr.api(explain_notice, api_name="explain_notice")
+
+
+if spaces is not None:
+
+    @spaces.GPU(duration=1)
+    def _zerogpu_placeholder() -> None:
+        """ZeroGPU Space는 시작할 때 @spaces.GPU 함수가 하나 이상 있어야 한다.
+
+        이 앱은 연산을 Claude API가 하므로 GPU가 필요 없다. 이 함수는 호출하지 않으며 GPU 할당량도 쓰지 않는다.
+        """
 
 if __name__ == "__main__":
     demo.launch(mcp_server=True)

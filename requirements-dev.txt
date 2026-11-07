@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest>=8
+# ZeroGPU decorator (preinstalled on HF ZeroGPU Spaces)
+spaces

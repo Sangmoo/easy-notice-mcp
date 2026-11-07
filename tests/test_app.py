@@ -1,7 +1,7 @@
 """앱·MCP 검증.
 
 1) 가짜 Anthropic 클라이언트로 입력 변환 → structured outputs 호출 → 검증·마스킹 → 결과 조립
-2) API 키 결정 (헤더 우선, 서버 키 + 하루 한도)
+2) API 키: 사용자 본인 키 필수 (서버 키로 대신하지 않음)
 3) 실제로 Gradio 서버를 띄워 원격 MCP(streamable HTTP)로 툴 목록·호출·헤더 전달 확인
 """
 import asyncio
@@ -98,9 +98,9 @@ def test_full_flow_uses_structured_outputs(files, fake):
 
 
 def test_ui_function_outputs(files, fake):
-    md, data = app.explain_upload(files, "아주 쉽게")
+    md, data = app.explain_upload(files, "아주 쉽게", "sk-ant-ui-key")
     assert md.startswith("## 건강보험료 고지서") and "87,650원" in md and "010-2222-3333" not in md
-    assert fake.seen["key"] is None  # 웹 UI는 서버 데모 키
+    assert fake.seen["key"] == "sk-ant-ui-key"  # 화면에 입력한 키 사용
     assert data["amount_krw"] == 87650
 
 
@@ -131,13 +131,13 @@ def test_errors_become_gr_error(tmp_path, fake):
     with pytest.raises(gr.Error, match="1개 이상"):
         app.explain_notice([], "보통", None)
     with pytest.raises(gr.Error, match="1개 이상"):
-        app.explain_upload(None, "보통")
+        app.explain_upload(None, "보통", "sk-ant-x")
     bad = tmp_path / "bad.jpg"
     bad.write_bytes(b"not an image")
     with pytest.raises(gr.Error, match="읽을 수 없습니다"):
-        app.explain_upload([str(bad)], "보통")
+        app.explain_upload([str(bad)], "보통", "sk-ant-x")
     with pytest.raises(gr.Error, match="URL 또는 data: URI"):
-        app.explain_notice([str(bad)], "보통", None)  # 원격 호출자는 서버 로컬 경로를 못 읽음
+        app.explain_notice([str(bad)], "보통", "sk-ant-x")  # 원격 호출자는 서버 로컬 경로를 못 읽음  # 원격 호출자는 서버 로컬 경로를 못 읽음
     assert fake.calls == []  # 파일 오류는 Claude를 부르기 전에 걸러짐
 
 
@@ -154,22 +154,28 @@ def test_bad_responses(stop, text, msg):
 
 # ---------- 2) API 키 결정 ----------
 
-def test_resolve_client(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with pytest.raises(ToolError, match="API 키가 없습니다"):
-        claude_util.resolve_client(None)
-    with pytest.raises(ToolError, match="API 키가 없습니다"):
-        claude_util.resolve_client("   ")
+def test_resolve_client_requires_user_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-should-be-ignored")
+    for missing in (None, "", "   "):
+        with pytest.raises(ToolError, match="API 키가 필요합니다"):
+            claude_util.resolve_client(missing)
+    with pytest.raises(ToolError, match="형식"):
+        claude_util.resolve_client("abc123")
     assert claude_util.resolve_client(" sk-ant-user ").api_key == "sk-ant-user"
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server")
-    monkeypatch.setenv("DEMO_DAILY_LIMIT", "2")
-    monkeypatch.setattr(claude_util, "_usage", {"date": None, "count": 0})
-    assert claude_util.resolve_client(None).api_key == "sk-ant-server"
-    assert claude_util.resolve_client("").api_key == "sk-ant-server"
-    with pytest.raises(ToolError, match="한도"):
-        claude_util.resolve_client(None)
-    assert claude_util.resolve_client("sk-ant-user").api_key == "sk-ant-user"  # 본인 키는 한도 없음
+
+def test_missing_key_in_ui_and_tool(files, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-should-be-ignored")
+    with pytest.raises(gr.Error, match="API 키가 필요합니다"):
+        app.explain_upload(files, "보통", "")
+    with pytest.raises(gr.Error, match="API 키가 필요합니다"):
+        app.explain_notice([_data_uri()], "보통", None)
+
+
+def test_zerogpu_placeholder_registered():
+    """ZeroGPU 시작 검사용 @spaces.GPU 함수가 있다 (로컬에선 spaces가 있을 때만)."""
+    if app.spaces is not None:
+        assert callable(app._zerogpu_placeholder)
 
 
 # ---------- 3) 원격 MCP (실제 Gradio 서버) ----------
@@ -214,8 +220,9 @@ def test_remote_mcp(server, fake):
     assert blocks[0]["type"] == "image"  # data: URI가 이미지로 변환됨
 
 
-def test_remote_mcp_without_key(server):
-    """헤더도 서버 키도 없으면 친절한 오류가 MCP 툴 오류로 돌아온다 (가짜 클라이언트 미사용 경로)."""
+def test_remote_mcp_without_key(server, monkeypatch):
+    """헤더가 없으면 (서버에 키가 있어도) 키가 필요하다는 오류가 MCP 툴 오류로 돌아온다."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-should-be-ignored")
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
@@ -233,4 +240,4 @@ def test_remote_mcp_without_key(server):
     finally:
         app.resolve_client = app_resolve
     assert res.isError
-    assert "API 키가 없습니다" in res.content[0].text
+    assert "API 키가 필요합니다" in res.content[0].text
