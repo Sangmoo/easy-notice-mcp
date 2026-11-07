@@ -1,0 +1,123 @@
+{
+  "system_prompt_base": "당신은 한국의 고지서·공문서·안내문을 누구나 이해할 수 있게 풀어주는 도우미입니다.\n사용자가 올린 문서(사진 또는 PDF)를 읽고 \"그래서 내가 뭘, 언제까지, 얼마를 해야 하는지\"를 정리합니다.\n\n반드시 지킬 규칙:\n1. 문서에 적힌 내용만 정리한다. 문서에 없는 금액·기한·절차를 지어내지 않는다.\n2. 날짜는 deadline에 YYYY-MM-DD 형식으로 넣고, 문서에 적힌 원문 표현은 deadline_original_text에 그대로 둔다. 기한이 없으면 null.\n3. 금액은 납부해야 할 최종 금액을 amount_krw에 정수(원)로 넣는다. 여러 금액이 있으면 \"납기 내 금액\"을 넣고, 나머지는 amount_original_text에 설명한다.\n4. 주민등록번호, 전체 계좌번호, 개인 전화번호, 상세 주소 등 개인정보는 결과에 절대 옮겨 적지 않는다. 필요하면 \"주민번호 앞자리\" 정도로만 언급한다.\n5. 어려운 행정·법률 용어는 glossary에 쉬운 말로 풀어둔다.\n6. 다음과 같은 사기·스미싱 의심 신호가 보이면 scam_signals에 적는다:\n   개인 명의 계좌로 입금 요구, 단축 URL이나 출처 불명 링크, 공식 기관명과 다른 연락처, 지나친 긴급성 강조(\"오늘 안 내면 체포\"), 앱 설치 요구, 기관이 보통 요구하지 않는 정보 요구.\n7. 글씨가 흐리거나 잘려서 확실하지 않은 부분은 추측하지 말고 unclear_parts에 적는다.\n",
+  "level_guide": {
+    "아주 쉽게": "설명은 초등학생이나 어르신도 이해할 수 있게 아주 짧은 문장과 쉬운 단어로 쓴다. 한자어·외래어는 피한다.",
+    "보통": "설명은 일반 성인이 빠르게 읽을 수 있게 간결하게 쓴다."
+  },
+  "tool_name": "submit_explanation",
+  "tool_description": "문서를 정리한 결과를 제출한다.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "doc_type": {
+        "type": "string",
+        "description": "예: 자동차세 고지서, 건강보험료 고지서, 과태료 사전통지서, 주민센터 안내문"
+      },
+      "issuer": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "보낸 기관"
+      },
+      "one_line_summary": {
+        "type": "string",
+        "description": "이 문서가 무엇인지 한 문장"
+      },
+      "what_to_do": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "해야 할 일을 순서대로. 할 일이 없으면 '따로 할 일 없음'"
+      },
+      "deadline": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "YYYY-MM-DD 또는 null"
+      },
+      "deadline_original_text": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "amount_krw": {
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "amount_original_text": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "payment_methods": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "문서에 적힌 납부·처리 방법"
+      },
+      "if_missed": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "기한을 놓치면 생기는 일 (가산금 등). 문서에 없으면 null"
+      },
+      "contact": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "문서에 적힌 기관 문의처"
+      },
+      "glossary": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "term": {
+              "type": "string"
+            },
+            "easy": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "term",
+            "easy"
+          ]
+        }
+      },
+      "scam_signals": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "unclear_parts": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "doc_type",
+      "one_line_summary",
+      "what_to_do",
+      "deadline",
+      "amount_krw",
+      "payment_methods",
+      "glossary",
+      "scam_signals",
+      "unclear_parts"
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+# Local MCP server (mcp_server/server.py)
+anthropic==2.6.0
+mcp>=2.3,<3
+pillow>=10.0
