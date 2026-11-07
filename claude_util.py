@@ -25,7 +25,14 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from errors import ToolError
 from validate import to_api_schema
 
+MODELS = {
+    "claude-sonnet-5-5": "Sonnet 5.5 (정확, 기본)",
+    "claude-haiku-5-5": "Haiku 5.5 (빠르고 저렴)",
+}
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5-5")
+# 정해진 칸을 채우는 정리 작업이라 깊은 추론이 필요 없다. 낮추면 응답이 빨라지고 비용도 준다.
+# (CLAUDE_EFFORT는 다른 도구가 쓰는 이름이라 이 앱 전용 이름을 쓴다)
+EFFORT = os.getenv("NOTICE_EFFORT", "low")
 MAX_SIDE = 1568  # 이 이상은 Claude가 내부적으로 축소하므로 미리 줄여 전송량/비용 절감
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_PDF_BYTES = 32 * 1024 * 1024  # Claude PDF 입력 한도
@@ -168,22 +175,27 @@ def call_structured(
     content: list[dict],
     schema: dict,
     max_tokens: int = 16000,
+    model: str | None = None,
 ) -> dict:
     """structured outputs로 스키마에 맞는 JSON을 받아 dict로 돌려준다."""
+    model = model if model in MODELS else MODEL
     try:
         resp = client.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": content}],
-            output_config={"format": {"type": "json_schema", "schema": to_api_schema(schema)}},
+            output_config={
+                "format": {"type": "json_schema", "schema": to_api_schema(schema)},
+                "effort": EFFORT,
+            },
         )
     except anthropic.AuthenticationError as e:
         raise ToolError("Anthropic API 키가 올바르지 않습니다.") from e
     except anthropic.PermissionDeniedError as e:
         raise ToolError(f"이 API 키로는 요청할 수 없습니다: {e.message}") from e
     except anthropic.NotFoundError as e:
-        raise ToolError(f"모델을 찾을 수 없습니다: {MODEL}") from e
+        raise ToolError(f"모델을 찾을 수 없습니다: {model}") from e
     except anthropic.RateLimitError as e:
         raise ToolError("Anthropic API 요청 한도에 걸렸습니다. 잠시 후 다시 시도해주세요.") from e
     except anthropic.BadRequestError as e:

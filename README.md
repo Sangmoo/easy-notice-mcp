@@ -35,11 +35,14 @@ tags:
 
 | 방식 | 개인정보 가림 | 음성 | 화질 |
 |---|---|---|---|
-| **자동**(추천) | GPU OCR로 가린 뒤 전송 | GPU TTS | CPU 보정 + GPU 확대 |
+| **⚡ 빠르게**(`Claude API`) | 원본 전송. '개인정보 가리기'를 켜면 Claude가 찾은 위치로 **공유용 사본**만 가림(조금 느려짐) | 브라우저 음성(웹)·안내 문장(MCP) | CPU 보정만 |
+| **자동** (웹 기본) | GPU OCR로 가린 뒤 전송 | GPU TTS | CPU 보정 + GPU 확대 |
 | 무료 모델(GPU) | 위와 같음 (GPU 실패 시 오류) | GPU TTS | 위와 같음 |
-| Claude API | 원본 전송, Claude가 찾은 위치로 **공유용 사본**만 가림 | 브라우저 음성(웹)·안내 문장(MCP) | CPU 보정만 |
 
-자동 모드는 GPU 사용량이 큰 작업(이미지 5쪽 이상)이거나 GPU를 쓸 수 없을 때(ZeroGPU 하루 사용량: 비로그인 2분·무료 계정 5분) Claude API 방식으로 넘어갑니다.
+- 웹 화면은 고른 처리 방식·난이도·모델·추가 기능을 브라우저에 기억합니다(API 키는 저장하지 않음). ⚡ 빠르게를 한 번 고르면 다음부터 처음부터 GPU 없이 동작합니다.
+- 결과 글을 먼저 보여 주고, 음성은 이어서 만듭니다. 진행 단계도 표시합니다.
+- 자동 모드는 GPU 사용량이 큰 작업(이미지 5쪽 이상)이거나 GPU를 쓸 수 없을 때(ZeroGPU 하루 사용량: 비로그인 2분·무료 계정 5분) Claude API 방식으로 넘어갑니다.
+- Claude 모델: Sonnet 5.5(정확, 기본) / Haiku 5.5(빠르고 저렴). 정리 작업이라 effort는 `low`로 둡니다(Space Variable `NOTICE_EFFORT`로 변경 가능).
 
 | 기능 | 모델 | 라이선스 |
 |---|---|---|
@@ -88,11 +91,12 @@ Claude Code: `claude mcp add --transport http easy-notice https://sangmoo-easy-n
 
 ### 툴
 
-`explain_notice(files, reading_level="아주 쉽게", mode="자동", redact=True, enhance=True)` — HF Space에서는 Space 이름이 붙어 `easy_notice_mcp_explain_notice`로 표시됩니다(클라이언트가 자동으로 인식).
+`explain_notice(files, reading_level="아주 쉽게", mode="Claude API", redact=True, enhance=True, model="claude-sonnet-5-5")` — HF Space에서는 Space 이름이 붙어 `easy_notice_mcp_explain_notice`로 표시됩니다(클라이언트가 자동으로 인식).
 
 - `files`: 문서 사진 또는 PDF 1~5개 — 공개 **http(s) URL** 또는 **data: URI** (`data:image/jpeg;base64,...`, `data:application/pdf;base64,...`)
 - `reading_level`: `아주 쉽게` | `보통`
-- `mode`: `자동` | `무료 모델(GPU)` | `Claude API`
+- `mode`: `Claude API`(기본, 가장 빠름) | `자동` | `무료 모델(GPU)`
+- `model`: `claude-sonnet-5-5`(기본) | `claude-haiku-5-5`
 - `redact`: 개인정보 가리기, `enhance`: 사진 보정
 - 결과: 처리 방식 안내 + 짧은 음성 안내 문장 + 마크다운 설명 + 구조화된 JSON (음성 파일·가린 이미지는 웹 화면에서 제공)
 
@@ -125,7 +129,7 @@ Claude 응답은 structured outputs(`output_config.format`, JSON Schema)로 받�
 ## Space 설정
 
 - 하드웨어: ZeroGPU. 모델은 시작할 때 GPU용으로 올려 두고 `@spaces.GPU` 함수(`gpu_prepare`, `gpu_tts`) 안에서만 실행합니다.
-- Secret 불필요. (선택) Variable `CLAUDE_MODEL` — 기본 `claude-sonnet-5-5`
+- Secret 불필요. (선택) Variable `CLAUDE_MODEL`(기본 모델), `NOTICE_EFFORT`(기본 `low`)
 
 ## 로컬 실행·테스트
 

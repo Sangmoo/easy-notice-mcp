@@ -33,9 +33,10 @@ OCR_LANGS = ["ko", "en"]
 SR_ID = "caidas/swin2SR-classical-sr-x2-64"
 TTS_ID = "facebook/mms-tts-kor"
 
-GPU_SECONDS_PER_PAGE = 6
-GPU_BASE_SECONDS = 10
-TTS_GPU_SECONDS = 20
+# ZeroGPU는 신청 시간이 짧은 작업을 먼저 처리한다. 넉넉하되 짧게 잡는다.
+GPU_SECONDS_PER_PAGE = 4
+GPU_BASE_SECONDS = 8
+TTS_GPU_SECONDS = 10
 
 
 def gpu(**kwargs):
@@ -132,7 +133,7 @@ def tts(speech: str) -> tuple[int, np.ndarray]:
 # ---------- @spaces.GPU 함수 ----------
 
 def _prepare_seconds(images, upscale_flags, do_ocr):
-    return min(120, GPU_BASE_SECONDS + GPU_SECONDS_PER_PAGE * max(1, len(images)))
+    return min(60, GPU_BASE_SECONDS + GPU_SECONDS_PER_PAGE * max(1, len(images)))
 
 
 @gpu(duration=_prepare_seconds)

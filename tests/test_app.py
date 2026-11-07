@@ -38,6 +38,7 @@ FAKE_OUTPUT = {
     "scam_signals": [], "unclear_parts": [], "voice_summary": "건강보험료를 내라는 안내예요",
 }
 KEY = "sk-ant-test-key"
+NOOP = lambda *a, **k: None  # noqa: E731 - gr.Progress 대신
 
 
 def _png(w=1200, h=1600) -> bytes:
@@ -125,6 +126,7 @@ def test_auto_gpu_redacts_before_sending(claude, gpu):
     assert np.asarray(img)[int(120 * sx), int(400 * sx)].max() < 40
     assert "미리 가린 부분" in call["system"] and "pii_regions" not in call["output_config"]["format"]["schema"]["properties"]
     assert "tool_choice" not in call and "tools" not in call
+    assert call["output_config"]["effort"] == "low" and call["model"] == "claude-sonnet-5-5"
     assert any("1곳을 가린 뒤" in n for n in out.notes)
     assert out.voice["text"].startswith("건강보험료를 내라는 안내예요.")
     assert out.data["contact"] == "1577-1000 / 담당자 010-****-3333"
@@ -185,8 +187,34 @@ def test_claude_mode_never_uses_gpu(claude, gpu):
     _claude_with_regions(claude)
     out = pipeline.explain([(_png(), "a.png")], "보통", KEY, mode="Claude API")
     assert out.route == "claude" and gpu.prepare == []
-    assert pipeline.speak(out, "Claude API") == (None, "Claude API 방식에서는 '🔊 브라우저로 읽기'로 들어 주세요.")
+    assert pipeline.speak(out.voice["speech"], "Claude API") == (None, "빠르게 방식에서는 '🔊 브라우저로 읽기'로 들어 주세요.")
     assert gpu.tts == []
+
+
+def test_fast_mode_without_share_copy_is_lean(claude, gpu):
+    """빠르게 + 공유용 사본 끔: GPU 없음, 좌표 요청 없음, PDF는 원본 그대로, 선택한 모델 사용."""
+    out = pipeline.explain([(_pdf(2), "doc.pdf")], "보통", KEY, mode="Claude API", share_copy=False,
+                           model="claude-haiku-5-5")
+    call = claude.calls[0]
+    assert gpu.prepare == [] and out.route == "claude"
+    assert "pii_regions" not in call["output_config"]["format"]["schema"]["properties"]
+    assert "pii_regions" not in call["system"]
+    assert [b["type"] for b in call["messages"][0]["content"]] == ["document", "text"]
+    assert call["model"] == "claude-haiku-5-5"
+    assert any("원본을 Claude로 보냈어요" in n for n in out.notes)
+
+
+def test_unknown_model_falls_back_to_default(claude, gpu):
+    pipeline.explain([(_png(), "a.png")], "보통", KEY, mode="Claude API", share_copy=False, model="gpt-x")
+    assert claude.calls[0]["model"] == "claude-sonnet-5-5"
+
+
+def test_progress_steps(claude, gpu):
+    steps = []
+    pipeline.explain([(_png(), "a.png")], "보통", KEY, progress=lambda f, m: steps.append((f, m)))
+    assert [m for _, m in steps][:3] == ["문서를 준비하는 중", "무료 모델(GPU)로 개인정보를 가리고 사진을 다듬는 중",
+                                        "Claude가 문서를 읽고 정리하는 중"]
+    assert [f for f, _ in steps] == sorted(f for f, _ in steps)
 
 
 def test_auto_many_pages_use_claude(claude, gpu):
@@ -198,11 +226,12 @@ def test_auto_many_pages_use_claude(claude, gpu):
 
 def test_speak(claude, gpu):
     out = pipeline.explain([(_png(), "a.png")], "보통", KEY)
-    audio, note = pipeline.speak(out, "자동")
+    audio, note = pipeline.speak(out.voice["speech"], "자동")
     assert audio[0] == 16000 and note is None
     assert gpu.tts == [out.voice["speech"]] and not any(c.isdigit() for c in gpu.tts[0])
+    assert pipeline.speak("", "자동") == (None, None)
     gpu.fail = True
-    assert pipeline.speak(out, "자동")[0] is None
+    assert pipeline.speak(out.voice["speech"], "자동")[0] is None
 
 
 @pytest.mark.parametrize("stop, text, msg", [
@@ -250,33 +279,59 @@ def test_ui_outputs(tmp_path, claude, gpu):
     f = tmp_path / "a.png"
     f.write_bytes(_png())
     status, vtext, vspeech, audio, md, gallery, data = app.explain_upload(
-        [str(f)], "아주 쉽게", "자동", ["개인정보 가리기", "사진 보정", "음성 안내"], KEY)
+        [str(f)], "아주 쉽게", "자동", ["개인정보 가리기", "사진 보정", "음성 안내"], "claude-sonnet-5-5", KEY,
+        progress=NOOP)
     assert "가린 뒤" in status
     assert vtext.startswith("건강보험료를 내라는 안내예요.") and "팔만 칠천육백오십 원" in vspeech
-    assert audio[0] == 16000 and len(gallery) == 1
+    assert audio is None and len(gallery) == 1  # 글 결과 먼저, 음성은 다음 단계
+    assert gpu.tts == []
+    audio, status2 = app.make_voice(vspeech, "자동", status)
+    assert audio[0] == 16000 and status2 == status
+    audio, status3 = app.make_voice(vspeech, "Claude API", status)
+    assert audio is None and "브라우저로 읽기" in status3
     assert md.startswith("## 건강보험료 고지서") and "010-2222-3333" not in md
     assert claude.seen["key"] == KEY
 
 
 def test_ui_errors(tmp_path, claude, gpu):
     with pytest.raises(gr.Error, match="1개 이상"):
-        app.explain_upload(None, "보통", "자동", [], KEY)
+        app.explain_upload(None, "보통", "자동", [], "claude-sonnet-5-5", KEY, progress=NOOP)
     f = tmp_path / "a.png"
     f.write_bytes(_png())
     with pytest.raises(gr.Error, match="API 키가 필요합니다"):
-        app.explain_upload([str(f)], "보통", "자동", [], "")
+        app.explain_upload([str(f)], "보통", "자동", [], "claude-sonnet-5-5", "", progress=NOOP)
     bad = tmp_path / "bad.jpg"
     bad.write_bytes(b"not an image")
     with pytest.raises(gr.Error, match="읽을 수 없습니다"):
-        app.explain_upload([str(bad)], "보통", "자동", [], KEY)
+        app.explain_upload([str(bad)], "보통", "자동", [], "claude-sonnet-5-5", KEY, progress=NOOP)
+
+
+def test_mode_switch_and_prefs():
+    opts, info = app.on_mode_change("Claude API", ["개인정보 가리기", "음성 안내"])
+    assert opts["value"] == ["음성 안내"] and "가장 빠릅니다" in info["info"]
+    opts, _ = app.on_mode_change("자동", ["음성 안내"])
+    assert opts["value"] == ["개인정보 가리기", "음성 안내"]
+    mode, level, model, options = app.load_prefs(
+        {"mode": "bogus", "level": "x", "model": "y", "options": ["z", "사진 보정"]})
+    assert mode["value"] == "자동" and level == "아주 쉽게" and model == "claude-sonnet-5-5"
+    assert options == ["사진 보정"]
+    mode, *_ = app.load_prefs({"mode": "Claude API"})
+    assert mode["value"] == "Claude API"
+    assert app.save_prefs("Claude API", "보통", "claude-haiku-5-5", None)["options"] == []
 
 
 def test_mcp_function(claude, gpu):
-    out = app.explain_notice([_data_uri(_png()), _data_uri(_pdf(1), "application/pdf")], "보통", "자동", True, True, KEY)
+    out = app.explain_notice([_data_uri(_png()), _data_uri(_pdf(1), "application/pdf")], "보통", "자동", True, True,
+                             "claude-sonnet-5-5", KEY)
     assert "### 🔊 음성 안내" in out and "## 건강보험료 고지서" in out and "```json" in out
     assert "가린 뒤" in out
+    # 기본값은 빠르게(Claude API): GPU 없이, 좌표도 요청하지 않음
+    claude.calls.clear()
+    gpu.prepare.clear()
+    app.explain_notice([_data_uri(_png())], x_anthropic_key=KEY)
+    assert gpu.prepare == [] and "pii_regions" not in claude.calls[0]["system"]
     with pytest.raises(gr.Error, match="URL 또는 data: URI"):
-        app.explain_notice(["/proc/self/environ"], "보통", "자동", True, True, KEY)
+        app.explain_notice(["/proc/self/environ"], x_anthropic_key=KEY)
 
 
 # ---------- 5) 원격 MCP (실제 Gradio 서버) ----------
@@ -313,8 +368,9 @@ def test_remote_mcp(server, claude, gpu):
     tools, res = _mcp(server, {"X-Anthropic-Key": KEY}, {"files": [_data_uri(_png())], "mode": "자동"})
     assert [t.name for t in tools] == ["explain_notice"]  # 웹 UI용 핸들러는 노출되지 않음
     props = tools[0].inputSchema["properties"]
-    assert set(props) == {"files", "reading_level", "mode", "redact", "enhance"}  # 키는 헤더로만
-    assert props["mode"]["enum"] == ["자동", "무료 모델(GPU)", "Claude API"]
+    assert set(props) == {"files", "reading_level", "mode", "redact", "enhance", "model"}  # 키는 헤더로만
+    assert props["mode"]["enum"] == ["Claude API", "자동", "무료 모델(GPU)"]
+    assert props["mode"]["default"] == "Claude API"
     assert not res.isError, res.content
     text = res.content[0].text
     assert "건강보험료 고지서" in text and "010-****-3333" in text and "010-2222-3333" not in text
