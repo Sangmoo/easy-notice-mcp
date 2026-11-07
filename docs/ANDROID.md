@@ -21,7 +21,7 @@
 
 - **패키지 이름**: 예) `io.github.sangmoo.easynotice` — **한 번 정하면 바꿀 수 없음**
 - **앱 이름**: 고지서 쉽게 보기
-- **개인정보처리방침 문의처**: Space Variable `PRIVACY_CONTACT`(이메일 또는 주소), `PRIVACY_OPERATOR`(운영자 이름)
+- **개인정보처리방침 운영자·문의처**: 코드 기본값 전상문 · cossack275@gmail.com (Space Variable `PRIVACY_OPERATOR`·`PRIVACY_CONTACT`로 바꿀 수 있음)
 
 ## 2. 앱 파일 만들기
 

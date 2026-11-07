@@ -59,10 +59,14 @@ def assetlinks() -> list | None:
 
 
 def privacy_html() -> str:
-    operator = html.escape(os.getenv("PRIVACY_OPERATOR", "고지서 쉽게 보기 운영자 (Sangmoo)"))
-    contact = os.getenv("PRIVACY_CONTACT", "https://github.com/Sangmoo/easy-notice-mcp/issues")
-    contact_html = (f'<a href="{html.escape(contact, quote=True)}">{html.escape(contact)}</a>'
-                    if contact.startswith("http") else html.escape(contact))
+    operator = html.escape(os.getenv("PRIVACY_OPERATOR", "전상문"))
+    contact = os.getenv("PRIVACY_CONTACT", "cossack275@gmail.com")
+    if contact.startswith("http"):
+        contact_html = f'<a href="{html.escape(contact, quote=True)}">{html.escape(contact)}</a>'
+    elif "@" in contact:
+        contact_html = f'<a href="mailto:{html.escape(contact, quote=True)}">{html.escape(contact)}</a>'
+    else:
+        contact_html = html.escape(contact)
     effective = html.escape(os.getenv("PRIVACY_EFFECTIVE", "2026-11-07"))
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

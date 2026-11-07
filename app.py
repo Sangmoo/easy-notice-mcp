@@ -1,4 +1,4 @@
-"""고지서·공문서 쉬운 말 풀이 — Gradio 앱 겸 원격 MCP 서버 (ZeroGPU).
+"""고지서 쉽게 보기 — Gradio 앱 겸 원격 MCP 서버 (ZeroGPU).
 
 Claude는 문서를 읽고 정리만 하고, D-day 계산·개인정보 마스킹·값 검증·결과 조립은 코드가 결정한다.
 ZeroGPU의 무료 모델로 (1) 개인정보를 이미지에서 먼저 가리고 (2) 짧은 음성 안내를 만들고 (3) 흐린 사진을 보정한다.
@@ -323,12 +323,12 @@ html.big-text .gradio-container {
 
 # ---------- 웹 UI: 화면 ----------
 
-with gr.Blocks(title="고지서 쉬운 말 풀이", delete_cache=(1800, 3600)) as demo:
+with gr.Blocks(title="고지서 쉽게 보기", delete_cache=(1800, 3600)) as demo:
     prefs = gr.BrowserState(DEFAULT_PREFS, storage_key="easy-notice-prefs", secret="easy-notice-prefs-v1")
     key_store = gr.BrowserState({"key": ""}, storage_key="easy-notice-key-v2", secret=KEY_STORE_SECRET)
 
     with gr.Row(equal_height=True):
-        gr.Markdown("# 📮 고지서 쉬운 말 풀이")
+        gr.Markdown("# 📮 고지서 쉽게 보기")
         big_text_btn = gr.Button("🔍 글씨 크게 / 작게", size="sm", scale=0, min_width=160)
     gr.Markdown(
         "**① 고지서 사진을 찍거나 올리고 → ② '쉽게 풀어주세요'를 누르세요.**  \n"

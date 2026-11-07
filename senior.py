@@ -159,7 +159,7 @@ def _event_details(data: dict) -> str:
         lines.append(f"할 일: {todo}")
     if phone := institution_phone(data.get("contact")):
         lines.append(f"문의: {phone}")
-    lines.append("고지서 쉬운 말 풀이로 정리 (원본 확인 필요)")
+    lines.append("고지서 쉽게 보기로 정리 (원본 확인 필요)")
     return "\n".join(lines)
 
 

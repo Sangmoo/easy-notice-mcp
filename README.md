@@ -1,5 +1,5 @@
 ---
-title: 고지서 공문서 쉬운 말 풀이 MCP
+title: 고지서 쉽게 보기
 emoji: 📮
 colorFrom: gray
 colorTo: yellow
@@ -16,7 +16,7 @@ tags:
   - claude
 ---
 
-# 📮 고지서·공문서 쉬운 말 풀이 (원격 MCP)
+# 📮 고지서 쉽게 보기 (웹 · 앱 · 원격 MCP)
 
 세금 고지서, 건강보험 안내문, 과태료 통지서, 관공서 공문을 사진이나 PDF로 넣으면
 "무엇을, 언제까지, 얼마를" 해야 하는지 쉬운 말로 정리합니다.
@@ -156,7 +156,7 @@ Claude 응답은 structured outputs(`output_config.format`, JSON Schema)로 받�
 - Secret `ANTHROPIC_API_KEY`: 운영자 키. 웹·앱 화면에서 키 없이 쓰는 무료 사용에 쓰입니다(없으면 사용자가 키를 넣어야 함). Anthropic 콘솔에서 **월 사용 한도**를 꼭 걸어 두세요.
 - Variable `FREE_DAILY_PER_USER`(기본 5): 한 사람(IP)당 하루 무료 횟수 / `FREE_DAILY_TOTAL`(기본 300): 전체 하루 무료 횟수. 카운터는 Space가 다시 시작되면 초기화됩니다.
 - (선택) Variable `CLAUDE_MODEL`(기본 모델), `NOTICE_EFFORT`(기본 `low`)
-- (앱 준비) Variable `PRIVACY_OPERATOR`·`PRIVACY_CONTACT`(개인정보처리방침의 운영자·문의처, 기본은 GitHub 이슈 주소), `ANDROID_PACKAGE`·`ANDROID_SHA256`(앱-사이트 연결 파일)
+- (앱 준비) Variable `PRIVACY_OPERATOR`·`PRIVACY_CONTACT`(개인정보처리방침의 운영자·문의처, 기본값 전상문 · cossack275@gmail.com), `ANDROID_PACKAGE`·`ANDROID_SHA256`(앱-사이트 연결 파일)
 
 ## 로컬 실행·테스트
 

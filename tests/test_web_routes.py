@@ -88,3 +88,10 @@ def test_assetlinks_off_until_configured(base, monkeypatch):
 def test_gradio_page_still_served(base):
     status, ctype, body = _get(base + "/")
     assert status == 200 and "text/html" in ctype and b"manifest" in body
+
+
+def test_privacy_defaults_operator(monkeypatch):
+    monkeypatch.delenv("PRIVACY_OPERATOR", raising=False)
+    monkeypatch.delenv("PRIVACY_CONTACT", raising=False)
+    page = web_routes.privacy_html()
+    assert "운영자: 전상문" in page and 'href="mailto:cossack275@gmail.com"' in page
