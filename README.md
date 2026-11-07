@@ -1,5 +1,5 @@
 ---
-title: Vue
+title: Easy Notice Mcp
 emoji: 🐢
 colorFrom: purple
 colorTo: indigo
@@ -7,6 +7,8 @@ sdk: static
 pinned: false
 app_build_command: npm run build
 app_file: dist/index.html
+license: mit
+short_description: easy-notice-mcp
 ---
 
 # vue
