@@ -229,15 +229,16 @@ def show_example(key: str):
 
 LOAD_JS = """
 () => {
-  try { if (localStorage.getItem('notice-big-text') === '1') document.documentElement.classList.add('big-text'); } catch (e) {}
+  // 기본은 큰 글씨. '작게'를 고른 사람만 small-text (예전 'notice-big-text' 값은 무시해 모두 큰 글씨로 시작)
+  try { if (localStorage.getItem('notice-small-text') === '1') document.documentElement.classList.add('small-text'); } catch (e) {}
   return [];
 }
 """
 
 BIG_TEXT_JS = """
 () => {
-  const on = document.documentElement.classList.toggle('big-text');
-  try { localStorage.setItem('notice-big-text', on ? '1' : '0'); } catch (e) {}
+  const small = document.documentElement.classList.toggle('small-text');
+  try { localStorage.setItem('notice-small-text', small ? '1' : '0'); } catch (e) {}
   return [];
 }
 """
@@ -306,13 +307,13 @@ PRINT_JS = """
 }
 """
 
-# 글자 크기는 Gradio 테마 변수(--text-*)를 따라가게 하고, '글씨 크게'는 그 변수만 키운다.
+# 글자 크기는 Gradio 테마 변수(--text-*)를 따라가게 하고, 기본은 그 변수를 키운 큰 글씨다 ('작게'를 누르면 html.small-text).
 # (테마가 변수를 .gradio-container에 정의하므로 거기서 !important로 덮어쓴다)
 CSS = """
 .big-btn { font-size: calc(var(--text-lg) * 1.2) !important; min-height: 3.2em !important; font-weight: 700 !important; }
 #steps { font-size: calc(var(--text-md) * 1.15); }
 .nc { font-size: calc(var(--text-md) * 1.3); }
-html.big-text .gradio-container {
+html:not(.small-text) .gradio-container {
   --text-xxs: 14px !important; --text-xs: 16px !important; --text-sm: 18px !important; --text-md: 21px !important;
   --text-lg: 24px !important; --text-xl: 28px !important; --text-xxl: 34px !important;
   --block-label-text-size: 18px !important; --block-info-text-size: 17px !important;
@@ -329,7 +330,7 @@ with gr.Blocks(title="고지서 쉽게 보기", delete_cache=(1800, 3600)) as de
 
     with gr.Row(equal_height=True):
         gr.Markdown("# 📮 고지서 쉽게 보기")
-        big_text_btn = gr.Button("🔍 글씨 크게 / 작게", size="sm", scale=0, min_width=160)
+        big_text_btn = gr.Button("🔍 글씨 작게 / 크게", size="sm", scale=0, min_width=160)
     gr.Markdown(
         "**① 고지서 사진을 찍거나 올리고 → ② '쉽게 풀어주세요'를 누르세요.**  \n"
         "무엇을, 언제까지, 얼마를 해야 하는지 쉽게 정리해 드려요.",

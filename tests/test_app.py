@@ -474,3 +474,10 @@ def test_ui_free_use_and_quota_text(tmp_path, claude, gpu, monkeypatch):
     assert "제한 없음" in app.quota_text(KEY, None)
     out = app.explain_upload([str(f)], "보통", "Claude API", [], "claude-sonnet-5-5", "", progress=NOOP)
     assert claude.seen["key"] == "OPERATOR" and out[-1] == "오늘 무료로 **4번** 더 쓸 수 있어요."
+
+
+def test_big_text_is_default():
+    # 큰 글씨가 기본: '작게'를 고른 경우(html.small-text)에만 테마 크기로 돌아간다
+    assert "html:not(.small-text) .gradio-container" in app.CSS and "--text-md: 21px" in app.CSS
+    assert "html.big-text" not in app.CSS
+    assert "notice-small-text" in app.LOAD_JS and "notice-small-text" in app.BIG_TEXT_JS
