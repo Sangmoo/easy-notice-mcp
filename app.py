@@ -312,7 +312,8 @@ PRINT_JS = """
 CSS = """
 .big-btn { font-size: calc(var(--text-lg) * 1.2) !important; min-height: 3.2em !important; font-weight: 700 !important; }
 #steps { font-size: calc(var(--text-md) * 1.15); }
-#text-size-btn { font-size: var(--text-lg) !important; font-weight: 700 !important; min-height: 2.6em !important; }
+#text-size-btn { font-size: var(--text-lg) !important; font-weight: 700 !important; min-height: 2.6em !important;
+  white-space: nowrap !important; min-width: max-content !important; flex: 0 0 auto !important; padding: 0 1em !important; }
 .nc { font-size: calc(var(--text-md) * 1.3); }
 html:not(.small-text) .gradio-container {
   --text-xxs: 14px !important; --text-xs: 16px !important; --text-sm: 18px !important; --text-md: 21px !important;
