@@ -328,9 +328,10 @@ with gr.Blocks(title="고지서 쉽게 보기", delete_cache=(1800, 3600)) as de
     prefs = gr.BrowserState(DEFAULT_PREFS, storage_key="easy-notice-prefs", secret="easy-notice-prefs-v1")
     key_store = gr.BrowserState({"key": ""}, storage_key="easy-notice-key-v2", secret=KEY_STORE_SECRET)
 
-    with gr.Row(equal_height=True):
-        gr.Markdown("# 📮 고지서 쉽게 보기")
-        big_text_btn = gr.Button("🔍 글씨 작게 / 크게", size="sm", scale=0, min_width=160)
+    gr.Markdown("# 📮 고지서 쉽게 보기")
+    # 오른쪽 위는 HF Space 배지(이름·좋아요)가 덮으므로 제목 아래 왼쪽에 둔다
+    with gr.Row():
+        big_text_btn = gr.Button("🔍 글씨 작게 / 크게", size="sm", scale=0, min_width=180)
     gr.Markdown(
         "**① 고지서 사진을 찍거나 올리고 → ② '쉽게 풀어주세요'를 누르세요.**  \n"
         "무엇을, 언제까지, 얼마를 해야 하는지 쉽게 정리해 드려요.",
