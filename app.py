@@ -312,6 +312,8 @@ PRINT_JS = """
 CSS = """
 .big-btn { font-size: calc(var(--text-lg) * 1.2) !important; min-height: 3.2em !important; font-weight: 700 !important; }
 #steps { font-size: calc(var(--text-md) * 1.15); }
+/* 휴대폰 폭에서는 HF Space 배지가 화면 위쪽 전체를 덮으므로 제목을 그 아래로 내린다 */
+@media (max-width: 640px) { #app-title { margin-top: 48px !important; } }
 #text-size-btn { font-size: var(--text-lg) !important; font-weight: 700 !important; min-height: 2.6em !important;
   white-space: nowrap !important; min-width: max-content !important; flex: 0 0 auto !important; padding: 0 1em !important; }
 .nc { font-size: calc(var(--text-md) * 1.3); }
@@ -330,7 +332,7 @@ with gr.Blocks(title="고지서 쉽게 보기", delete_cache=(1800, 3600)) as de
     prefs = gr.BrowserState(DEFAULT_PREFS, storage_key="easy-notice-prefs", secret="easy-notice-prefs-v1")
     key_store = gr.BrowserState({"key": ""}, storage_key="easy-notice-key-v2", secret=KEY_STORE_SECRET)
 
-    gr.Markdown("# 📮 고지서 쉽게 보기")
+    gr.Markdown("# 📮 고지서 쉽게 보기", elem_id="app-title")
     # 오른쪽 위는 HF Space 배지(이름·좋아요)가 덮으므로 제목 아래 왼쪽에 둔다
     with gr.Row():
         big_text_btn = gr.Button("🔍 글씨 작게 / 크게", scale=0, min_width=220, elem_id="text-size-btn")
