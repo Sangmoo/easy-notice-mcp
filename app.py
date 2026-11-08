@@ -312,6 +312,7 @@ PRINT_JS = """
 CSS = """
 .big-btn { font-size: calc(var(--text-lg) * 1.2) !important; min-height: 3.2em !important; font-weight: 700 !important; }
 #steps { font-size: calc(var(--text-md) * 1.15); }
+#text-size-btn { font-size: var(--text-lg) !important; font-weight: 700 !important; min-height: 2.6em !important; }
 .nc { font-size: calc(var(--text-md) * 1.3); }
 html:not(.small-text) .gradio-container {
   --text-xxs: 14px !important; --text-xs: 16px !important; --text-sm: 18px !important; --text-md: 21px !important;
@@ -331,7 +332,7 @@ with gr.Blocks(title="고지서 쉽게 보기", delete_cache=(1800, 3600)) as de
     gr.Markdown("# 📮 고지서 쉽게 보기")
     # 오른쪽 위는 HF Space 배지(이름·좋아요)가 덮으므로 제목 아래 왼쪽에 둔다
     with gr.Row():
-        big_text_btn = gr.Button("🔍 글씨 작게 / 크게", size="sm", scale=0, min_width=180)
+        big_text_btn = gr.Button("🔍 글씨 작게 / 크게", scale=0, min_width=220, elem_id="text-size-btn")
     gr.Markdown(
         "**① 고지서 사진을 찍거나 올리고 → ② '쉽게 풀어주세요'를 누르세요.**  \n"
         "무엇을, 언제까지, 얼마를 해야 하는지 쉽게 정리해 드려요.",
